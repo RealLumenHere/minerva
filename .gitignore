@@ -1,0 +1,28 @@
+# wq#137 minerva repo — code + migrations only; NO data, NO memory prose, NO creds
+# Data stores
+*.db
+*.db-*
+*.sqlite*
+# Backups / caches
+*.bak*
+*.bak.*
+__pycache__/
+*.pyc
+# Generated / prose stores (contain fleet creds in places — restic covers them)
+archival/
+archive/
+briefings/
+context/
+dream/
+episodes/
+logs/
+eval/
+eval_sets/
+proposals/
+scratch/
+config/
+# Env / secrets (belt and braces)
+.env
+*.key
+*.pem
+*credential*

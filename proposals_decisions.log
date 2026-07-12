@@ -1,0 +1,28 @@
+{"ts": "2026-07-01T23:53:41.904238+00:00", "id": "929adac35211", "old": "reject", "new": "reject", "note": "proposals-ui deploy verification write"}
+{"ts": "2026-07-01T23:55:08.517481+00:00", "id": "929adac35211", "old": "reject", "new": "reject", "note": ""}
+{"ts": "2026-07-02T01:00:18.918583+00:00", "id": "b75b1bde701f", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:23.940361+00:00", "id": "a0eb90c717f5", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:26.983882+00:00", "id": "3b3555d22be9", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:30.171790+00:00", "id": "a0943669ee7a", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:34.916470+00:00", "id": "91b2586f4ad2", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:45.523381+00:00", "id": "5abf518fae00", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:53.666898+00:00", "id": "8f7efdb067bf", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:00:58.453311+00:00", "id": "7e07c9a8b66e", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:01:26.174889+00:00", "id": "b75b1bde701f", "old": "deploy_ready", "new": "deploy_ready", "note": ""}
+{"ts": "2026-07-02T01:10:11.851107+00:00", "id": "b75b1bde701f", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:10:19.982167+00:00", "id": "a0eb90c717f5", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:10:28.094230+00:00", "id": "3b3555d22be9", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:10:36.190974+00:00", "id": "a0943669ee7a", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:10:44.295172+00:00", "id": "91b2586f4ad2", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:10:52.383253+00:00", "id": "5abf518fae00", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:11:00.470339+00:00", "id": "8f7efdb067bf", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T01:11:08.561093+00:00", "id": "7e07c9a8b66e", "old": "deploy_ready", "new": "shipped", "note": "Frank shipped 2026-07-01 via UI (no-op Ship bug); re-processed post-fix", "ticket_id": null, "ticket_err": "'NoneType' object has no attribute 'loader'"}
+{"ts": "2026-07-02T02:16:23.296080+00:00", "id": "b75b1bde701f", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:16:31.451691+00:00", "id": "a0eb90c717f5", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:16:39.610988+00:00", "id": "3b3555d22be9", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:16:47.755621+00:00", "id": "a0943669ee7a", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:16:55.862043+00:00", "id": "91b2586f4ad2", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:17:04.027131+00:00", "id": "5abf518fae00", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:17:12.175366+00:00", "id": "8f7efdb067bf", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-02T02:17:20.339557+00:00", "id": "7e07c9a8b66e", "old": "shipped", "new": "shipped", "note": "ticket backfill", "ticket_id": null, "ticket_err": null}
+{"ts": "2026-07-11T23:44:17.681205+00:00", "id": "f627ed840cad", "old": "defer", "new": "reject", "note": "Frank-confirmed REJECT 2026-07-11 (wq#92): source paper is RLVR TRAINING-time per-token credit assignment; Lumen runs no RL training and minerva_verify is an inference-time judge \u2014 no call site exists (same category error as rejected ab5aa5). Eval-quality intent already covered by wq#99 scorer fix + latent guard.", "ticket_id": null, "ticket_err": null}

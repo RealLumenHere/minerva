@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""
+minerva_memory.py - MemGPT/Letta-inspired three-tier memory for Lumen/Claude sessions.
+
+Tiers:
+  - Core (hot): /home/lumen/claude_memory.md — always in context, manually curated + auto-appended Minerva brief
+  - Recall (searchable): SQLite FTS5 index of session events, decisions, intel hits
+  - Archival (cold): Markdown notes in /home/lumen/minerva/archival/ with embeddings
+
+Usage:
+  - write_note(kind, title, content, tags=None) -> note_id (archival)
+  - log_event(kind, content, ref=None) -> (recall tier, for searchable history)
+  - search(query, top_k=5, tiers=['recall','archival']) -> unified results
+  - core_append(section, text) -> appends to claude_memory.md under a named section
+
+The `search()` function is the key: next-session Claude queries it to surface context
+relevant to the current task without loading the full archive.
+"""
+import json, sqlite3, hashlib, os, sys, re, requests
+from pathlib import Path
+from datetime import datetime, timezone
+import numpy as np
+from dotenv import load_dotenv
+load_dotenv('/home/lumen/agent/.env')
+
+DB = Path('/home/lumen/minerva/minerva.db')
+ARCHIVAL_DIR = Path('/home/lumen/minerva/archival')
+MEMORY_FILE = Path('/home/lumen/claude_memory.md')
+LOG = Path('/home/lumen/minerva/logs/memory.log')
+LOCAL_OLLAMA = 'http://127.0.0.1:11434'  # local Ollama (PBox retired 2026-06-07)
+EMBED_MODEL = 'nomic-embed-text'
+
+
+def log(m):
+    ts = datetime.now(timezone.utc).strftime('%H:%M:%S UTC')
+    line = f'[{ts}] {m}'
+    print(line, flush=True)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, 'a') as f:
+        f.write(line + '\n')
+
+
+def embed(text):
+    try:
+        r = requests.post(
+            f'{LOCAL_OLLAMA}/api/embed',
+            json={'model': EMBED_MODEL, 'input': text[:4000]},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return None
+        vec = r.json().get('embeddings', [[]])[0]
+        return np.array(vec, dtype=np.float32) if vec else None
+    except Exception as e:
+        log(f'  embed err: {e}')
+        return None
+
+
+def cosine(a, b):
+    if a is None or b is None:
+        return 0.0
+    denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1e-9
+    return float(np.dot(a, b) / denom)
+
+
+# ---------- FTS5 recall table bootstrap ----------
+
+def _ensure_recall_fts():
+    """Create the FTS5 virtual table for recall if missing."""
+    conn = sqlite3.connect(DB)
+    # Check if FTS5 is available
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(kind, content, ref, ts)")
+        conn.commit()
+    except sqlite3.OperationalError as e:
+        log(f'  FTS5 unavailable: {e}. Falling back to plain table.')
+        conn.execute('''CREATE TABLE IF NOT EXISTS recall_fts (
+            kind TEXT, content TEXT, ref TEXT, ts TEXT
+        )''')
+        conn.commit()
+    conn.close()
+
+
+# ---------- Archival (cold, semantic) ----------
+
+def write_note(kind, title, content, tags=None, source_ref=None):
+    """Persist an archival note with embedding for semantic retrieval."""
+    ARCHIVAL_DIR.mkdir(parents=True, exist_ok=True)
+    nid = hashlib.md5(f'{kind}:{title}:{content[:200]}'.encode()).hexdigest()[:12]
+    path = ARCHIVAL_DIR / f'{datetime.now(timezone.utc).strftime("%Y%m%d")}_{nid}_{kind}.md'
+    md_parts = [
+        '---',
+        f'id: {nid}',
+        f'kind: {kind}',
+        f'title: {title}',
+        f'tags: {",".join(tags or [])}',
+        f'source_ref: {source_ref or ""}',
+        f'created_at: {datetime.now(timezone.utc).isoformat()}',
+        '---',
+        '',
+        f'# {title}',
+        '',
+        content,
+    ]
+    path.write_text('\n'.join(md_parts))
+
+    # Embedding on title + content
+    emb = embed(f'{title}. {content[:2000]}')
+    emb_bytes = emb.tobytes() if emb is not None else b''
+
+    conn = sqlite3.connect(DB)
+    conn.execute(
+        '''INSERT OR REPLACE INTO archival_notes
+           (id, kind, title, content, embedding, tags, source_ref, created_at)
+           VALUES (?,?,?,?,?,?,?,?)''',
+        (nid, kind[:40], title[:300], content[:8000], emb_bytes,
+         ','.join(tags or [])[:500], (source_ref or '')[:300],
+         datetime.now(timezone.utc).isoformat()))
+    conn.commit()
+    conn.close()
+    log(f'  archival note: {nid} [{kind}] "{title[:60]}"')
+    return nid
+
+
+# ---------- Recall (searchable FTS) ----------
+
+def log_event(kind, content, ref=None):
+    """Append a recall-tier event. Cheap, fast, no embedding."""
+    _ensure_recall_fts()
+    ts = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(DB)
+    conn.execute(
+        'INSERT INTO recall_fts (kind, content, ref, ts) VALUES (?,?,?,?)',
+        (kind[:40], content[:4000], (ref or '')[:300], ts))
+    conn.commit()
+    conn.close()
+
+
+# ---------- Search (unified across tiers) ----------
+
+def search(query, top_k=5, tiers=None):
+    """Unified search. Returns list of dicts with {tier, score, title, content, ref, ts}."""
+    tiers = tiers or ['recall', 'archival']
+    results = []
+
+    # --- Recall tier: FTS5 text search ---
+    if 'recall' in tiers:
+        _ensure_recall_fts()
+        conn = sqlite3.connect(DB)
+        try:
+            # FTS5 query
+            safe_q = re.sub(r'[^\w\s]', ' ', query).strip()
+            if safe_q:
+                rows = conn.execute(
+                    'SELECT kind, content, ref, ts FROM recall_fts WHERE recall_fts MATCH ? ORDER BY rank LIMIT ?',
+                    (safe_q, top_k)
+                ).fetchall()
+                for kind, content, ref, ts in rows:
+                    results.append({
+                        'tier': 'recall', 'score': 1.0,  # FTS rank normalized externally
+                        'kind': kind, 'title': content[:80], 'content': content,
+                        'ref': ref, 'ts': ts,
+                    })
+        except sqlite3.OperationalError:
+            # Fallback: LIKE scan
+            rows = conn.execute(
+                "SELECT kind, content, ref, ts FROM recall_fts WHERE content LIKE ? ORDER BY ts DESC LIMIT ?",
+                (f'%{query}%', top_k)
+            ).fetchall()
+            for kind, content, ref, ts in rows:
+                results.append({
+                    'tier': 'recall', 'score': 0.5,
+                    'kind': kind, 'title': content[:80], 'content': content,
+                    'ref': ref, 'ts': ts,
+                })
+        conn.close()
+
+    # --- Archival tier: semantic embedding search ---
+    if 'archival' in tiers:
+        q_emb = embed(query)
+        if q_emb is not None:
+            conn = sqlite3.connect(DB)
+            rows = conn.execute(
+                'SELECT id, kind, title, content, embedding, tags, created_at FROM archival_notes'
+            ).fetchall()
+            conn.close()
+            scored = []
+            for nid, kind, title, content, emb_b, tags, ts in rows:
+                if not emb_b:
+                    continue
+                note_emb = np.frombuffer(emb_b, dtype=np.float32)
+                sim = cosine(q_emb, note_emb)
+                if sim >= 0.3:
+                    scored.append({
+                        'tier': 'archival', 'score': sim,
+                        'id': nid, 'kind': kind, 'title': title,
+                        'content': content[:800], 'tags': tags, 'ts': ts,
+                    })
+            scored.sort(key=lambda x: -x['score'])
+            results.extend(scored[:top_k])
+
+    # Sort all tiers together (archival sim scores are more meaningful; FTS normalized to 1.0)
+    results.sort(key=lambda x: -x['score'])
+    return results[:top_k]
+
+
+# ---------- Core tier: claude_memory.md section management ----------
+
+def core_append(section, text):
+    """Append text under a named section in claude_memory.md.
+    Section markers: <!-- SECTION:name START --> ... <!-- SECTION:name END -->
+    Creates the section if it doesn't exist.
+    """
+    if not MEMORY_FILE.exists():
+        log(f'  memory file missing: {MEMORY_FILE}')
+        return False
+    content = MEMORY_FILE.read_text()
+    m_start = f'<!-- SECTION:{section} START -->'
+    m_end = f'<!-- SECTION:{section} END -->'
+    now_pt = _now_pt()
+    addition = f'\n- [{now_pt}] {text}'
+
+    if m_start in content and m_end in content:
+        pattern = re.compile(re.escape(m_start) + r'(.*?)' + re.escape(m_end), re.DOTALL)
+        def _sub(match):
+            return f'{m_start}{match.group(1).rstrip()}{addition}\n{m_end}'
+        new_content = pattern.sub(_sub, content)
+    else:
+        # Append new section at the top
+        block = f'{m_start}\n## {section}{addition}\n{m_end}\n\n'
+        new_content = block + content
+    MEMORY_FILE.write_text(new_content)
+    log(f'  core_append [{section}]: {text[:80]}')
+    return True
+
+
+def _now_pt():
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(timezone.utc).astimezone(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M PT')
+    except Exception:
+        return datetime.now(timezone.utc).isoformat()
+
+
+# ---------- Seed archival with Minerva architecture knowledge ----------
+
+SEED_NOTES = [
+    {
+        'kind': 'architecture',
+        'title': 'Minerva Self-Improvement System Topology',
+        'content': '''Minerva is Lumen's self-improvement layer, deployed 2026-04-22. It converts research intel into code changes.
+
+Pipeline:
+  1. lumen-intel (every 4h) pulls 20 newsletters + arXiv + HF + GitHub into /home/lumen/agent/intel.db
+  2. minerva-classifier (every 4h, +30min) scores each intel item on two axes: audience_relevance (blog-worthy) and self_relevance (Lumen-adoptable). All LLM calls via LiteLLM gateway (localhost:4000), model env MINERVA_MODEL (default cerebras-llama), fail-loud on fallback.
+  3. minerva-proposal (every 4h, +45min) takes high-self-relevance items and generates structured proposals with hallucination-guarded current-state claims. Rejected if verification fails.
+  4. minerva-eval (03,07,11,17,19,23 UTC) runs safety checks on accepted proposals: off-limits keyword scan, rogue script scan, 5 service health checks (intel + cerebras/sambanova/mistral/openrouter fleet workers). Blocks or marks deploy_ready. (Ghost backup + PBox checks removed 2026-06-10 — both permanently retired.)
+  5. minerva-brief (daily 13:00 UTC = 06:00 PT) synthesizes last 24h: proposals, intel highlights, verification stats. Writes /home/lumen/minerva/briefings/YYYY-MM-DD.md AND auto-prepends summary to /home/lumen/claude_memory.md so next Claude session sees it on load.
+
+Central DB: /home/lumen/minerva/minerva.db (6 tables: classified_intel, proposals, skills, archival_notes, verification_log, changelog + recall_fts).
+
+Hallucination guard (minerva_verify.py) wraps everything. Three modes: strict (citation+judge), semantic (proposals), loose (judge-only). Uses Cerebras for LLM-as-judge.
+
+Skill library (minerva_skills.py) is Voyager-pattern: 4 active seed skills (verify_fleet_output, service_health_check, rogue_script_check, service_backup_and_restart) + backup_ghost_db RETIRED 2026-06-10 (Ghost deleted). Retrieval via localhost Ollama nomic-embed-text. Rolling success_rate per skill.
+
+Three-tier memory (minerva_memory.py): core = claude_memory.md, recall = SQLite FTS5 index, archival = markdown notes with embeddings.''',
+        'tags': ['minerva', 'architecture', 'self-improvement'],
+    },
+    {
+        'kind': 'lesson',
+        'title': 'Pre-existing SQLite thread-safety bug in lumen_intel was silently blocking newsletters',
+        'content': '''Discovered 2026-04-22. lumen_intel.py runs fetch_newsletters/fetch_github/fetch_huggingface/fetch_semantic_scholar in parallel threads, but all threads shared the single `conn` SQLite object passed from main. Python's sqlite3 module is thread-local by default, so every non-arXiv fetch was silently failing with "SQLite objects created in a thread can only be used in that same thread" errors.
+
+Result: for weeks, Lumen was effectively running as an arXiv-only paper scraper. All configured newsletter feeds, HF Hub pulls, GitHub trending, and Semantic Scholar queries were dead on arrival.
+
+Fix: each thread now opens its own sqlite3 connection inside the run() wrapper. Join timeout bumped 120s->240s for the 20-feed set.
+
+Takeaway: silent failures in systemd oneshot services are extremely dangerous. The health-check skill must look at error lines, not just service state (oneshot "inactive" after successful exit is normal).''',
+        'tags': ['bug', 'lumen-intel', 'threading', 'silent-failure'],
+    },
+    {
+        'kind': 'decision',
+        'title': 'Verification modes: strict vs semantic vs loose',
+        'content': '''minerva_verify.py has three modes. Choose based on context:
+
+STRICT (default): citation_score >= 0.65 AND judge_score >= 0.70 AND final (0.4*cit + 0.6*judge) >= 0.70. Use when the answer should directly extract from context (fact retrieval, quotes, citations).
+
+SEMANTIC: judge_score >= 0.70 AND final (0.15*cit + 0.85*judge) >= 0.70. Use when the LLM is paraphrasing context (proposals, summaries of long docs). The word-overlap citation check fails paraphrases; this mode trusts the judge.
+
+LOOSE: judge_score >= 0.6 only. Use for creative content that is grounded but not a direct restatement.
+
+Real failure caught during build: MCP orchestration proposal initially failed STRICT with citation=0.00 because the LLM paraphrased "Lumen has no memory framework" as "Lumen lacks multi-agent coordination and state management". Fix: switched proposal pipeline to SEMANTIC mode AND verify only current_state claims (proposed_change is future speculation that cannot be verified against current state).''',
+        'tags': ['verification', 'modes', 'design-decision'],
+    },
+]
+
+
+def seed():
+    log('=== Seeding archival memory ===')
+    for n in SEED_NOTES:
+        write_note(n['kind'], n['title'], n['content'], tags=n.get('tags'))
+    log(f'Seeded {len(SEED_NOTES)} archival notes')
+
+    # Also log Minerva deployment as a recall event
+    log_event('deployment', 'Minerva v1 deployed: 6 modules, 4 systemd timers, 5 seed skills, 3 seed archival notes', ref='minerva_build_2026-04-22')
+    log_event('bugfix', 'Fixed SQLite thread-safety in lumen_intel.py — newsletter feeds now flowing (was silently broken)', ref='intel_py_bak_20260422_180011')
+    log_event('bugfix', 'Fixed service_health_check skill to ignore upstream HTTP 4xx/5xx warnings', ref='skill_ffe2be7bd03b')
+    log('Logged 3 recall events')
+
+
+if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == 'seed':
+        seed()
+    elif len(sys.argv) > 2 and sys.argv[1] == 'search':
+        q = ' '.join(sys.argv[2:])
+        for r in search(q, top_k=5):
+            print(f'[{r["tier"]}] {r["score"]:.3f} | {r.get("kind","")} | {r.get("title","")[:80]}')
+    elif len(sys.argv) > 1 and sys.argv[1] == 'list':
+        conn = sqlite3.connect(DB)
+        for row in conn.execute('SELECT kind, title, created_at FROM archival_notes ORDER BY created_at DESC'):
+            print(row)
+        conn.close()
+    else:
+        print('usage: minerva_memory.py [seed | search <query> | list]')

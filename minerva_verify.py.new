@@ -1,0 +1,289 @@
+#!/usr/bin/env python3
+"""
+minerva_verify.py — Hallucination Guard (v2, 2026-06-10 overhaul)
+Multi-layer faithfulness verification before any claim leaves Minerva.
+
+Design (research-backed, 2026):
+  Layer 1 (semantic grounding): per-claim cosine entailment-proxy via local
+    nomic-embed-text (replaces old keyword-overlap) + verbatim number check.
+  Layer 2 (claim-level NLI judge): SummaC/AlignScore/MiniCheck lineage, run by
+    an LLM labelling EACH claim SUPPORTED / UNSUPPORTED / NOT_IN_CONTEXT
+    (3-label > 0-1 float), few-shot rubric, self-consistency over N runs
+    (majority vote; sampling beats greedy), CROSS-FAMILY judge (gpt-oss judging
+    Llama output) to avoid self-preference bias.
+  Fail-closed: judge/gateway/embed errors => not-grounded, with a DISTINCT
+    error_kind persisted so an outage is never mistaken for hallucination.
+
+Future hardening (documented, not built — avoids torch dep): swap Layer 2 for a
+  local NLI cross-encoder (HHEM-2.1-open or MiniCheck-FT5 770M).
+"""
+import json, re, sqlite3, time, requests, os
+from pathlib import Path
+from datetime import datetime, timezone
+from collections import Counter
+from dotenv import load_dotenv
+
+load_dotenv('/home/lumen/agent/.env')
+DB = Path('/home/lumen/minerva/minerva.db')
+LOG = Path('/home/lumen/minerva/logs/verify.log')
+
+LITELLM_URL = 'http://localhost:4000/v1/chat/completions'
+LITELLM_KEY = os.getenv('LITELLM_MASTER_KEY', '')
+OLLAMA_EMBED_URL = 'http://127.0.0.1:11434/api/embed'
+EMBED_MODEL = 'nomic-embed-text'
+
+GENERATOR_MODEL = os.getenv('MINERVA_MODEL', 'cerebras-llama')
+JUDGE_MODEL = os.getenv('VERIFY_JUDGE_MODEL', 'cerebras-oss-120b')
+JUDGE_MODEL_2 = os.getenv('VERIFY_JUDGE_MODEL_2', 'deepseek-v4-flash')
+JUDGE_SAMPLES = int(os.getenv('VERIFY_JUDGE_SAMPLES', '3'))
+JUDGE_TEMP = float(os.getenv('VERIFY_JUDGE_TEMP', '0.3'))
+
+COSINE_GROUNDED = float(os.getenv('VERIFY_COSINE_T', '0.62'))
+CITATION_THRESHOLD = float(os.getenv('VERIFY_CIT_T', '0.55'))
+JUDGE_THRESHOLD = float(os.getenv('VERIFY_JUDGE_T', '0.70'))
+FINAL_THRESHOLD = float(os.getenv('VERIFY_FINAL_T', '0.70'))
+
+
+def log(msg):
+    ts = datetime.now(timezone.utc).strftime('%H:%M:%S UTC')
+    line = f'[{ts}] {msg}'
+    print(line, flush=True)
+    LOG.parent.mkdir(parents=True, exist_ok=True)
+    with open(LOG, 'a') as f: f.write(line + '\n')
+
+
+def extract_claims(text: str) -> list:
+    sents = re.split(r'(?<=[.!?])\s+', text.strip())
+    claims = []
+    for s in sents:
+        s = s.strip()
+        if len(s) < 15: continue
+        if len(s.split()) < 4: continue
+        if re.match(r'^(however|moreover|in conclusion|also|first|second|finally|next|then)\b', s.lower()):
+            continue
+        claims.append(s)
+    return claims
+
+
+def split_context_sentences(context: str) -> list:
+    parts = re.split(r'(?<=[.!?\n])\s+|\n+', context.strip())
+    return [p.strip() for p in parts if len(p.strip()) >= 8]
+
+
+def _embed_batch(texts: list):
+    if not texts:
+        return []
+    try:
+        r = requests.post(OLLAMA_EMBED_URL, json={'model': EMBED_MODEL, 'input': texts}, timeout=30)
+        if r.status_code != 200:
+            return None
+        embs = r.json().get('embeddings')
+        if not embs or len(embs) != len(texts):
+            return None
+        return embs
+    except Exception:
+        return None
+
+
+def _cosine(a, b):
+    s = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(y * y for y in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return s / (na * nb)
+
+
+def semantic_citation_score(claims: list, context: str) -> tuple:
+    if not claims:
+        return 0.0, [], None
+    ctx_sents = split_context_sentences(context)
+    if not ctx_sents:
+        return 0.0, [(c, 0.0, 'no_context') for c in claims], None
+    embs = _embed_batch(claims + ctx_sents)
+    if embs is None:
+        return _keyword_fallback(claims, context), [], 'embed_unavailable'
+    claim_embs = embs[:len(claims)]
+    ctx_embs = embs[len(claims):]
+    results, grounded = [], 0
+    for c, ce in zip(claims, claim_embs):
+        best = max((_cosine(ce, xe) for xe in ctx_embs), default=0.0)
+        nums = re.findall(r'\d+[.,]?\d*%?', c)
+        nums_ok = all(n in context for n in nums) if nums else True
+        ok = best >= COSINE_GROUNDED and nums_ok
+        tag = 'ok' if ok else ('num_mismatch' if not nums_ok else 'low_similarity')
+        results.append((c, round(best, 3), tag))
+        if ok: grounded += 1
+    return grounded / len(claims), results, None
+
+
+def _keyword_fallback(claims, context):
+    ctx_tokens = set(re.findall(r'\w+', context.lower()))
+    stop = {'the','a','an','is','are','was','were','of','in','to','for','and','or','but','that','this','it','on','with','as','by'}
+    grounded = 0
+    for c in claims:
+        content = set(re.findall(r'\w+', c.lower())) - stop
+        if not content: continue
+        if len(content & ctx_tokens) / len(content) >= 0.5:
+            grounded += 1
+    return grounded / len(claims) if claims else 0.0
+
+
+_FEWSHOT = '''EXAMPLES:
+CONTEXT: "Lumen runs on a Dell T5810 with 40GB RAM and no GPU. The fleet uses Cerebras and Mistral."
+CLAIMS:
+1. Lumen runs on a Dell T5810.
+2. Lumen has an NVIDIA RTX 4060 GPU.
+3. The fleet includes SambaNova.
+LABELS:
+1. SUPPORTED
+2. UNSUPPORTED
+3. NOT_IN_CONTEXT
+(1 stated verbatim; 2 contradicts "no GPU"; 3 neither stated nor contradicted.)'''
+
+
+def _judge_once(claims: list, context: str, model: str):
+    if not LITELLM_KEY:
+        return None, '', 'judge_key_missing'
+    numbered = '\n'.join(f'{i+1}. {c}' for i, c in enumerate(claims))
+    prompt = f'''You are a strict NLI fact-checker. For EACH claim decide its relationship to CONTEXT only (ignore world knowledge). Exactly one label per claim:
+- SUPPORTED: directly stated or logically entailed by CONTEXT. Numbers/names/dates must match verbatim.
+- UNSUPPORTED: CONTEXT contradicts the claim.
+- NOT_IN_CONTEXT: CONTEXT neither states nor contradicts it.
+
+{_FEWSHOT}
+
+Now label these. Return ONLY JSON: {{"labels": [...], "rationale": "<1 sentence>"}} with exactly {len(claims)} labels in order.
+
+CONTEXT:
+{context[:4000]}
+
+CLAIMS:
+{numbered}'''
+    try:
+        r = requests.post(
+            LITELLM_URL,
+            headers={'Authorization': f'Bearer {LITELLM_KEY}', 'Content-Type': 'application/json'},
+            json={'model': model, 'messages': [{'role': 'user', 'content': prompt}],
+                  'temperature': JUDGE_TEMP, 'max_tokens': 800},
+            timeout=40)
+        if r.status_code != 200:
+            return None, '', f'judge_http_{r.status_code}'
+        txt = r.json()['choices'][0]['message']['content']
+        m = re.search(r'\{[\s\S]*\}', txt)
+        if not m:
+            return None, txt, 'judge_no_json'
+        obj = json.loads(m.group(0))
+        labels = obj.get('labels', [])
+        if not isinstance(labels, list) or len(labels) != len(claims):
+            return None, txt, 'judge_label_count_mismatch'
+        norm = []
+        for l in labels:
+            l = str(l).strip().upper()
+            norm.append(l if l in ('SUPPORTED', 'UNSUPPORTED', 'NOT_IN_CONTEXT') else 'NOT_IN_CONTEXT')
+        return norm, obj.get('rationale', ''), None
+    except Exception as e:
+        return None, '', f'judge_err:{type(e).__name__}'
+
+
+def judge_entailment(claims: list, context: str) -> tuple:
+    if not claims:
+        return 1.0, [], 'no_claims', None
+    all_runs, rationale, last_err = [], '', None
+    for _ in range(max(1, JUDGE_SAMPLES)):
+        labels, raw, err = _judge_once(claims, context, JUDGE_MODEL)
+        if labels is not None:
+            all_runs.append(labels)
+            if raw and not rationale and isinstance(raw, str):
+                rationale = raw[:200]
+        else:
+            last_err = err
+    if not all_runs:
+        return 0.0, ['JUDGE_ERROR'] * len(claims), f'fail_closed:{last_err}', last_err
+    final_labels = []
+    for i in range(len(claims)):
+        votes = Counter(run[i] for run in all_runs)
+        final_labels.append(votes.most_common(1)[0][0])
+    supported = sum(1 for l in final_labels if l == 'SUPPORTED')
+    return supported / len(claims), final_labels, rationale, None
+
+
+def verify(answer: str, context: str, subject: str = 'unknown', model: str = 'unknown', mode: str = 'strict') -> dict:
+    claims = extract_claims(answer)
+    cit_score, cit_details, cit_err = semantic_citation_score(claims, context)
+    judge_score, claim_labels, judge_rationale, judge_err = judge_entailment(claims, context)
+    error_kind = judge_err or cit_err
+
+    if mode == 'strict':
+        final = 0.4 * cit_score + 0.6 * judge_score
+        passed = (final >= FINAL_THRESHOLD and cit_score >= CITATION_THRESHOLD and judge_score >= JUDGE_THRESHOLD)
+    elif mode == 'semantic':
+        final = 0.3 * cit_score + 0.7 * judge_score
+        passed = (judge_score >= JUDGE_THRESHOLD and final >= FINAL_THRESHOLD)
+    else:
+        final = judge_score
+        passed = judge_score >= 0.6
+
+    if judge_err:
+        passed = False
+
+    reason = None
+    if not passed:
+        reasons = []
+        if judge_err: reasons.append(f'judge_error({judge_err})')
+        if cit_err == 'embed_unavailable': reasons.append('embed_error(keyword_fallback)')
+        if cit_score < CITATION_THRESHOLD: reasons.append(f'citation_low({cit_score:.2f})')
+        if judge_score < JUDGE_THRESHOLD: reasons.append(f'judge_low({judge_score:.2f})')
+        if final < FINAL_THRESHOLD: reasons.append(f'final_low({final:.2f})')
+        reason = ';'.join(reasons) or 'below_threshold'
+
+    n_supported = sum(1 for l in claim_labels if l == 'SUPPORTED')
+    result = {
+        'passed': passed, 'citation_score': cit_score, 'judge_score': judge_score,
+        'final_score': final, 'reason': reason, 'judge_rationale': judge_rationale,
+        'error_kind': error_kind, 'mode': mode, 'num_claims': len(claims),
+        'claims_entailed': n_supported, 'claim_labels': claim_labels,
+        'failing_claims': [c for c, s, r in cit_details if r != 'ok'],
+    }
+    try:
+        conn = sqlite3.connect(DB)
+        conn.execute('''INSERT INTO verification_log
+            (subject, input_text, context_ref, citation_score, judge_score, final_score, passed,
+             rejected_reason, model, ts, judge_rationale, error_kind, mode, n_claims, claims_entailed)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (subject, answer[:2000], context[:500], cit_score, judge_score, final, int(passed),
+             reason, model, datetime.now(timezone.utc).isoformat(),
+             judge_rationale, error_kind, mode, len(claims), n_supported))
+        conn.commit(); conn.close()
+    except Exception as e:
+        log(f'DB log fail: {e}')
+
+    if judge_err and os.getenv('VERIFY_ALERT', '1') == '1':
+        _alert_judge_outage(subject, judge_err)
+
+    log(f'verify [{subject}] mode={mode}: passed={passed} cit={cit_score:.2f} judge={judge_score:.2f} '
+        f'final={final:.2f} claims={len(claims)} entailed={n_supported}'
+        + (f' ERR={error_kind}' if error_kind else '') + (f' ({reason})' if reason else ''))
+    return result
+
+
+_ALERT_STATE = Path('/home/lumen/minerva/logs/.verify_last_alert')
+def _alert_judge_outage(subject, err):
+    try:
+        now = time.time()
+        if _ALERT_STATE.exists() and now - _ALERT_STATE.stat().st_mtime < 1800:
+            return
+        url = os.getenv('NTFY_URL_ALERTS', 'http://localhost:8080/lumen-updates')
+        requests.post(url, data=f'minerva_verify judge unavailable ({err}) - guard fail-closing, proposals rejected. subject={subject}'.encode(),
+                      headers={'Title': 'Minerva verify judge DOWN', 'Priority': 'high', 'Tags': 'warning'}, timeout=5)
+        _ALERT_STATE.write_text(str(now))
+    except Exception:
+        pass
+
+
+if __name__ == '__main__':
+    ctx = 'Python is a programming language created by Guido van Rossum. It was first released in 1991. Python uses indentation for code blocks.'
+    good = 'Python is a programming language first released in 1991. Its creator is Guido van Rossum.'
+    bad  = 'Python was created by Dennis Ritchie in 1972 at Bell Labs and compiles to machine code directly.'
+    print('--- GOOD ---'); print({k: v for k, v in verify(good, ctx, 'selftest_good', mode='semantic').items() if k != 'failing_claims'})
+    print('--- BAD ---');  print({k: v for k, v in verify(bad,  ctx, 'selftest_bad', mode='semantic').items() if k != 'failing_claims'})

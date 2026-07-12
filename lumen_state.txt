@@ -1,0 +1,30 @@
+LUMEN CURRENT STATE (auto-derived, verified 2026-07-12 06:45 UTC):
+
+Hardware: host lumen (Dell T5810), Intel(R) Xeon(R) CPU E5-2699 v4 @ 2.20GHz, Ubuntu 26.04 LTS, ~61GB RAM, no dedicated inference GPU (AMD RX550 display only). Tailscale 100.117.66.102. Storage: /data/lumen 468G total, 407G free; /scratch 1906G total, 1869G free.
+
+LLM gateway (LiteLLM localhost:4000) — ALL inference routes through it; NO Anthropic/OpenAI spend. Models available: cerebras-llama, cerebras-llama-pinned, cerebras-oss-120b, deepseek-chat, deepseek-v4-flash, deepseek-v4-pro, gemini-flash, gpt-3.5-turbo, hathor-embed, hathor-lfm-1b, isis-qwen3-32b, isis-qwen36, lumen-embed, lumen-lfm2-1b, lumen-lfm2-thinking, messenger-chat, messenger-re, mistral-small, nephthys-embed, nephthys-qwen3-14b, openrouter-free, qwen36-local, sambanova-llama.
+
+Active Lumen/Minerva systemd units right now: lumen-agent.service, lumen-alert-queue.service, lumen-aq-autoack.timer, lumen-backup-critical.timer, lumen-backup-important.timer, lumen-backup-offsite.timer, lumen-backup-prune.timer, lumen-backup-verify.timer, lumen-brain-health.timer, lumen-briefing.timer, lumen-command-receiver.service, lumen-corrector.timer, lumen-daily-report.timer, lumen-dashboard.service, lumen-deepseek-spend.timer, lumen-dgm.timer, lumen-dream.timer, lumen-ebay-watch.timer, lumen-evaluator.service, lumen-fleet-cerebras.service, lumen-fleet-mistral.service, lumen-fleet-openrouter.service, lumen-fleet-sambanova.service, lumen-generator.service, lumen-github-watch.timer, lumen-intel.timer, lumen-messenger.service, lumen-model-watchdog.timer, lumen-monitor.service, lumen-news-digest.timer, lumen-node-killer.service, lumen-orchestrator.service, lumen-persona-engine.service, lumen-planner.service, lumen-power.service, lumen-prompt-engine.service, lumen-proposals-ui.service, lumen-reflector.timer, lumen-research-index.timer, lumen-rosco.timer, lumen-scout.timer, lumen-scratch-sweep.timer, lumen-scribe.service, lumen-self-healer.service, lumen-sentinel-watch.timer, lumen-signal-engine.timer, lumen-smart-watchdog.service, lumen-sqlite-health.timer, lumen-state-reconcile.timer, lumen-throttle-off.timer, lumen-throttle-on.timer, lumen-vip-api.service, lumen-vip-watcher.service, lumen-watchdog.timer, lumen-weekly-report.timer, minerva-brief.timer, minerva-classifier.timer, minerva-eval.timer, minerva-proposal.timer, minerva-tag-sections.path.
+
+Fleet (from bi-temporal state store, roles only):
+- 3dprinter: 3D print server (Klipper dual-instance)
+- anubis: Borg backup repo + Gitea
+- apep: CUPS print server (Samsung M2020W; Zebra GK420D planned) | online
+- apis: RE/forensics bench (ASRock N3450)
+- be3600: GL-iNet Slate 7 workbench router
+- hapi: BC-250 inference cluster (ASRock 4U12G chassis); expandable 3->6+ blades, +chassis; one model per blade behind
+- lumen: primary AI orchestration host (T5810)
+- maat: Postgres + Vaultwarden node
+- nephthys: awareness + embeddings (Mac Pro 6,1) | serving: qwen3-14b+nomic-embed live in LiteLLM; reboot unblo
+- seshat: Nextcloud + Collabora
+- thor: fleet workstation / TTS
+- thoth: Torrent/media/Plex server (dedicated). Scales toward ~1500 concurrent torrents — heavy disk I/O, network, conn | online
+- wadjet: Ma'at vault HA standby | deployed HA standby, streaming async lag0; auto-promote ARME
+
+Real current GAPS (the truth — do not invent others):
+- Intel feed keyword pre-scoring is shallow; feed health is not monitored.
+- No experiment/eval harness to measure whether adopted changes actually help.
+- Prompt-engine topic banks are static, no auto-adaptation.
+- No automated deployer for deploy_ready proposals; they require a human/Claude session.
+
+Content policy: NO publishing of any kind. Ghost CMS was permanently deleted 2026-05 for legal reasons. Research outputs MUST become integration proposals, never published content. PBox GPU node RETIRED 2026-06-07 — no GPU inference node exists. Surface Pro refurbishment business is permanently off-limits.
