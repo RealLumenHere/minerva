@@ -1,0 +1,641 @@
+
+===== RCA-CANDIDATES (27) =====
+
+--- cad54c49 [code-ship] 2026-08-14T17:47
+TITLE: wq#563 SHIPPED: lumen-pr's pre-merge conflict guard now works on Gitea. It switched on .mergeable_state (a GitHub field) which Gitea returns null for, so both case arms were dead and the guard silentl
+CONTENT: ## What changed
+- lumen-pr: new mergeability_guard() replacing the inline case in cmd_land. NEW probe_wq563.py (17 assertions). No service touched.
+
+## What worked
+- Confirmed the defect against the live forge BEFORE writing code
+- and built a throwaway repo with a real conflict to measure actual behaviour. End-to-end proof both builds on real conflicted PRs. All fixture repos deleted (http=204).
+
+## What failed
+- An edit_block fuzzy-matched and STRIPPED need_repo from cmd_land. Caught on the very next diff and reverted the same turn
+- probe D3 now asserts that exact damage cannot recur. Lesson: diff against the backup after every structural edit
+- not just at the end.
+
+## Why / lessons
+THE 
+
+--- 38ba77a0 [code-ship] 2026-08-14T17:43
+TITLE: wq#565 SHIPPED: pat-scan and dispatch-lint now run on daily systemd timers (Persistent=true), alerting via the existing ntfy-onfailure@ template which does ntfy + aq row. Neither ExecStart pipes; neit
+CONTENT: ## What changed
+- New units lumen-pat-scan.{service
+- timer} and lumen-dispatch-lint.{service
+- timer} in /etc/systemd/system
+- enabled. wq523_pat_residue.py: canonical homes now GLOBBED (/home/lumen/.secrets/*.token) and new --alert mode. probe_wq565.py new (24 assertions).
+
+## What worked
+- Proved the alert chain for real rather than simulating: pat-scan unit failed on the actual finding
+- OnFailure fired
+- aq rows 562/563 persist
+- dispatch-lint unit succeeded so the states are distinguishable. probe 24/0 green vs 5 red on pre-change build.
+
+## What failed
+- probe B3 was red first pass because the assertion matched the COMMENT in my own unit file explaining why SuccessExitStatus is absent
+
+--- cb9b55ec [measurement] 2026-08-14T04:12
+TITLE: wq#559 released as honest partial: diagnosis re-verified from RAM with two corrections. MONEY IS NO LONGER STATIC - $431 -> $911 at 04:08Z, first income since 08-10, a direct consequence of wq#564 put
+CONTENT: ## What changed
+- no code
+- reports/559_catch_buy_partial.md
+- board note
+- worktree created and removed cleanly
+
+## What worked
+- Confirmed independently: bag=one stack id234x1
+- balls 0
+- potions 0
+- party 1 L28. Decoded item 234 from ROM myself: TM01=id201 so 234=TM34
+- TechnicalMachines[34]->move 117->MoveNames=BIDE. Proved the catch gate by execution: catchAdvice null at balls=0
+- renders at balls=1
+- solo-insurance branch fires for non-wanted foes. Proved emulator RAM is writable from a probe (injected poke_ball x5
+- read back)
+- so the catch path can be sandbox-tested without a mart.
+
+## What failed
+- Deliverables 2 (buy) and 3 (catch end-to-end) NOT built - the physical throw
+- wPart
+
+--- 66a1b13a [measurement] 2026-08-14T04:04
+TITLE: wq#521 CLOSED by measurement (no code, no cap change): Mt Moon 1F transit cap premise REFUTED. Post-552/564 live traverse crossed 1F in 4 turns with ONE interruption at [1/5]; stale evidence was 26 tu
+CONTENT: ## What changed
+- no code
+- reports/521_transit_cap_remeasure.md
+- board note
+- worktree created and removed cleanly
+
+## What worked
+- map59 pair census 131 edges (reproduces fable1 exactly)
+- map60=0
+- map61=12 (matches wq#552 seal). Pair-aware==pair-blind on EVERY route leg (10/10
+- 30/30
+- 28/28
+- 91/91) so the 131 edges cost zero on the path. Live: replan=0 blocked=[] on all plans
+- 45 steps attempted/40 moved/zero collision refusals. Legs L1-L5 reached in 11 turns.
+
+## What failed
+- L5 (91-step
+- the only leg with real cap exposure) NOT traversed end to end - brain went east to an NPC instead of goto(12
+- 7)
+- so the decisive measurement is still open. Encounter-rate estimate rests on o
+
+--- 6c357a2a [infra] 2026-08-14T03:57
+TITLE: Reviewed external agent's log-growth plan; adopted 1 of 4 items, REJECTED 2 as wrong-or-dangerous, found the fix the plan missed. VERIFIED OLLAMA_DEBUG is NOT set — the plan's headline fix was a no-op
+CONTENT: ## What changed
+- NEW /etc/rsyslog.d/10-ollama-drop.conf
+- rsyslog restarted+confirmed active
+- backups /etc/rsyslog.conf.bak.20260814_035341 + /home/lumen/backups/etc-config/rsyslog.d.bak.20260814_035341.tgz
+
+## What worked
+- rsyslogd -N1 validated BEFORE restart
+- clean-offset 60s sample proved 0 ollama lines in syslog while journalctl -u ollama still receives
+- auth.log still written
+- fail2ban confirmed backend=systemd so it never depended on rsyslog files anyway
+
+## What failed
+- REJECTED from the plan: (a) 'set OLLAMA_DEBUG=false' — not set
+- no-op
+- (b) 'create /etc/logrotate.d/syslog' — /etc/logrotate.d/rsyslog ALREADY defines /var/log/syslog
+- a second file defining the same path is
+
+--- a3fe4278 [code-ship] 2026-08-14T03:50
+TITLE: wq#564 shipped (LPP, PR #38 squash 9927192): Mt Moon exit guidance resolved PER POCKET from the player's live reachable component. Root cause: the pack named B2F (5,7) as a global forced first step, b
+CONTENT: ## What changed
+- src/mtmoon_route.ts (new)
+- src/live_agent.ts
+- src/probe_route564.ts (new)
+- src/probe_fossil535.ts
+- src/fixtures.ts
+- deployed via lpp-restart
+
+## What worked
+- 9/9 pockets resolve to a leg
+- probe_route564 35/0 with a printed OLD-vs-NEW red/green
+- fossil535 32/0
+- phase514 33/0
+- live T4 warped to map60(17
+- 11) and guidance advanced to L2 by itself - first floor transition toward the exit since 08-08
+
+## What failed
+- The re-based probe assertion did NOT go red as predicted: my own comment QUOTING the retired rule kept the raw-source grep green (filed as R5 THE CITED RULE in fixtures.ts
+- fixed with instructionBody()). My own new guidance also failed probe section D t
+
+--- 88a2af58 [infra] 2026-08-14T03:32
+TITLE: logrotate FIXED PROPERLY + closed the monitoring gap behind it. (1) Evicted /etc/logrotate.d/rsyslog.bak.20260808_023635 (pre-edit residue from the 08-08 rsyslog tightening) to /home/lumen/backups/etc
+CONTENT: ## What changed
+- /etc/logrotate.d/rsyslog.bak.20260808_023635 MOVED (not deleted)
+- /etc/logrotate.conf (bak .bak.20260814_032813)
+- /var/lib/logrotate/status backed up
+- NEW /home/lumen/bin/lumen-failed-units + lumen-failed-units.{service
+- timer} enabled
+
+## What worked
+- logrotate --debug rc=0
+- decoy .bak.20260814_TEST planted and re-parsed rc=0 proving the taboopat guard bites
+- real run Result=success ExecMainStatus=0
+- 0 failed units box-wide
+- failed-unit monitor verified through full edge cycle with a deliberate failtest-canary (NEWLY FAILED alert -> silent on repeat -> CLEARED on reset)
+- aq test rows 545/546 resolved
+
+## What failed
+- MY EARLIER CLAIM TO FRANK WAS WRONG: I said '
+
+--- d60d852d [infra] 2026-08-14T03:20
+TITLE: wq#567 embed-pin STOOD DOWN pre-cutover: built ollama-embed.service (:11435 nomic pinned) + warm script, unit failed first start (likely ExecStartPost perms under /home/lumen), then ram-cap.conf comme
+CONTENT: ## What changed
+- /etc/systemd/system/ollama-embed.service (staged
+- disabled)
+- /home/lumen/bin/ollama-embed-warm
+- wq#567
+- state fact lumen/ollama_residency
+
+## What worked
+- precheck+drop-in comment caught the conflict before cutover
+- clean stand-down
+
+## What failed
+- unit first-start (undiagnosed by choice)
+
+## Why / lessons
+recorded operator directive outranks tonight's ticket approval
+
+
+--- 7f139c21 [audit] 2026-08-14T02:45
+TITLE: LPP investigation run (fable1, Frank hold-all order): wq#560 DONE, 559+521 diagnosed+released. Headline: ticket's 170/63/35/7 = raw substring counts (exact reproduction), real failure mode is single-c
+CONTENT: ## What changed
+- board LPP_QUEUE_PROGRESS.md (append-only notes)
+- reports/560_
+- 559_
+- 521_*.md
+- no repo/service/state changes
+
+## What worked
+- pair-aware BFS over MapModel checkpoints + ROM-only map59 rebuild
+- substring-count hypothesis reproduced ticket numbers exactly
+
+## What failed
+- fossil pickup script nerd-gate unverified (flagged
+- cheap sandbox test named)
+- 1F sprites unmodelled (no map59 checkpoint)
+
+## Why / lessons
+diagnose-first per dispatch; three prior tickets built on false facts
+
+
+--- b304c12f [code-ship] 2026-08-14T02:13
+TITLE: wq#546 CLOSED (fleet lane, fleet2): publishing scope fence made mechanical. Built /home/lumen/infra/github/agent-scope.conf (ALLOW/NEVER/PUBLIC, default deny) + /home/lumen/bin/lumen-repo-scope, wired
+CONTENT: ## What changed
+- infra/github/agent-scope.conf (new)
+- bin/lumen-repo-scope (new)
+- bin/probe_wq546.py (new)
+- bin/lumen-pr
+- bin/gh-audit
+- bin/lumen-ruleset
+- agents/repo-visibility-sentinel/{allowlist.txt
+- repo_sentinel.py}
+- commit ab72d33 on lumen-bin
+
+## What worked
+- probe_wq546 35/0 deployed vs 12/23 pre-change
+- F1 red proves old lumen-pr would branch on winforge
+- sentinel dry-run unchanged public=8 violations=0
+- lumen-pr on the in-scope pokemon repo still rc 0 (no lane regression)
+- probe_wq532 still 32/0
+
+## What failed
+- deliverable 3 only PARTIAL — release/tag/visibility denied in the checker but there is no release tool in bin/ to gate
+- the original release was raw curl
+- 
+
+--- 90376eb0 [code-ship] 2026-08-14T01:12
+TITLE: wq#554 PART 1 SHIPPED (LPP, PR #37 squash b83c8b1): probe_steptrace542 G2/G3 retry from a fresh load and report SKIP instead of counting an interrupting wild battle as PASS; G-fixture copyFixture'd pe
+CONTENT: ## What changed
+- pokemon/src/probe_steptrace542.ts
+- wq#554 blocked
+- wq#521 unblocked + body rewritten with its retraction recorded in-ticket
+- reports 551/554/555 amended with the sha correction
+- LPP_QUEUE_PROGRESS board
+
+## What worked
+- SKIP path exercised not assumed — forcing the in-battle read gives 12 passed/0 failed/2 skipped where the OLD code gives a clean 14 passed
+- natural run 14/0
+- regressions events551 31/0
+- linkevents555 14/0
+- linkpaths543 24/0
+- tsc clean
+- end-of-session sweep caught the stale sha before the session closed
+
+## What failed
+- I quoted lpp-sentinel's deploy_drift sha (972bfab) in three reports and multiple board lines without verifying against systemctl 
+
+--- 5f8d5096 [code-ship] 2026-08-14T01:03
+TITLE: wq#555 SHIPPED (LPP, PR #36 squash ef7f73e): link/Cable-Club drivers moved to events/link with their own retention budget, 14 callsites repointed eventsDir()->linkEventsDir(); live_agent.ts sweeps BOT
+CONTENT: ## What changed
+- pokemon/src/fixtures.ts (linkEventsDir)
+- pokemon/src/live_agent.ts
+- 14 files in pokemon/src/link/
+- pokemon/src/probe_linkevents555.ts (new)
+- pokemon/src/link/probe_linkpaths543.ts (D4/D5/F2)
+- data migration events/rdv-*.jsonl -> events/link/
+
+## What worked
+- probe_linkevents555 14/0
+- probe_linkpaths543 24/0 (was 21 assertions)
+- regressions events551 31/0 evt522 13/0 metrics 21/0 fixtures540 8/0 steptrace542 14/0
+- tsc clean
+- migration md5 before==after
+- 35 .jsonl before and after
+- lpp-git taken correctly with --ttl 10 for land only
+
+## What failed
+- Not verified live: service runs 972bfab
+- tree ef7f73e — link sweep and extended retention event first execute on n
+
+--- 05b6cb38 [code-ship] 2026-08-14T00:54
+TITLE: wq#551 SHIPPED (LPP, PR #35 squash e220532): EventBus constructor no longer deletes event logs; retention moved to explicit free function retainEventLogs() with one owner (live_agent.ts at boot, emits
+CONTENT: ## What changed
+- pokemon/src/events.ts
+- pokemon/src/fixtures.ts
+- pokemon/src/live_agent.ts
+- pokemon/src/probe_events551.ts (new)
+- wq#555 + wq#556 filed
+
+## What worked
+- probe_events551 31/0 on primary tree
+- red/green proven at 25/6 with the constructor call re-injected
+- regressions evt522 13/0
+- metrics 21/0
+- fixtures540 8/0
+- steptrace542 14/0
+- flee 3/0
+- oscillation 5/0
+- events/ intact at 35 jsonl / 3 gz / 62 summaries
+- full 113-file 27M archive at wip-snapshots/lpp_events_archive_20260814_003932Z_wq551 which beats the prior evidence-of-record by 3 gz logs
+
+## What failed
+- slock acquire lpp-git --ttl 10m was REJECTED (--ttl takes an integer
+- not a duration string) and the rej
+
+--- 384b328b [session] 2026-08-13T23:56
+TITLE: wq#552 SHIPPED (PR #33, squash 5d137ea): MapModel now models Gen 1 TILE-PAIR collisions. Root cause of the Mt Moon B2F 919-step confinement: pokered treats walkability as a property of the (standing t
+CONTENT: ## What changed
+- (none)
+
+## What worked
+- (none)
+
+## What failed
+- (none)
+
+## Why / lessons
+(none)
+
+
+--- 83c1c401 [infra] 2026-08-13T16:47
+TITLE: wq#548: sentinel_probes.py now edge-clears its own aq rows on PASS — closes the third and last layer of the 08-13 SLA-breach storm
+CONTENT: ## What changed
+- sentinel/probes/sentinel_probes.py (edge-clear on PASS
+- bak .20260813_164444)
+- alerts.db rows 457/463 auto-resolved
+- 459/458/465/491/502 manually resolved
+- lumen_state wadjet.role + wadjet.ha_auto_promote corrected
+
+## What worked
+- patched run resolved 2 stale rows immediately
+- gated probes correctly left untouched (only clears what it re-verified)
+- aq open 47->40
+- probe-storage-integrity PASS sla=0 critical=False two cycles running
+
+## What failed
+- hathor/apis/wadjet unreach is now structural (13/16 forever) — no expected-offline roster exists
+- left for Frank's decommission-vs-parked call
+- ntfy-sourced aq rows still have no recovery path at all
+
+## Why / lessons
+
+--- 053a77f7 [infra] 2026-08-13T16:34
+TITLE: Storage/sentinel alert storm cleared: probe-storage-integrity back to PASS critical=False. Root cause was the self-referential SLA loop (open aq rows never auto-resolve when the condition clears -> sl
+CONTENT: ## What changed
+- agents/storage-audit/overlay.yaml isis max_watts 130->145 (bak .20260813_163122)
+- aq#490/501/506 resolved
+- alerts.db backed up .bak.20260813_163122
+
+## What worked
+- isis measured 112.7W sustained / 131.1W peak at full llama-server load (Qwen3-32B
+- RAPL 75W) - 130W envelope guaranteed recurring alerts
+- same class as nephthys aq#453 (110->170). Post-change probe run: PASS 13/16 nodes cleared=1 esc=0 sla=0 critical=False.
+
+## What failed
+- NOT fixed by me: hathor/wadjet/apis remain unreachable (hathor+wadjet deliberately powered down since 07-18
+- apis offline 13h) - these are unreachable_ok so they never drove critical
+- sla_hits alone did. Also: handoff verify still rep
+
+--- c5eec24c [session] 2026-08-13T14:34
+TITLE: IDENTITY COLLISION on rabbit15-262130: two live processes drove one wq identity (wq#537 recurrence). Other half (A) posted 14:13Z; I posted corroboration 14:34Z. KEY EVIDENCE FROM MY SIDE: A reports i
+CONTENT: ## What changed
+- (none)
+
+## What worked
+- (none)
+
+## What failed
+- (none)
+
+## Why / lessons
+(none)
+
+
+--- 16ccd623 [session] 2026-08-13T06:37
+TITLE: wq#518 shipped (rabbit12): LPP resume trap root-caused and fixed. Gen 1 Route 4 (map 15) is TWO disconnected places sharing one map id, proved from the ROM (4-column wall x=20..23 solid on 18/18 rows;
+CONTENT: ## What changed
+- (none)
+
+## What worked
+- (none)
+
+## What failed
+- (none)
+
+## Why / lessons
+(none)
+
+
+--- b1eff7c1 [code-ship] 2026-08-13T05:47
+TITLE: wq#516 shipped (rabbit7): LPP economy deadlock diagnosed and made visible. PR #8 merged 0f5e87c1cc — src/economy.ts (economyAdvice: one prioritised directive, BROKE -> buy -> route to mart -> catch ->
+CONTENT: ## What changed
+- src/economy.ts (new)
+- src/probe_economy.ts (new)
+- src/agent.ts (+20 lines)
+- reports/516_economy_diagnosis.md
+- board x2. NOT deployed — no service restart taken.
+
+## What worked
+- diagnosis proved link by link from sidecar money history + 51 run summaries + the three gate sites in code
+- PR #8 CI green
+- tsc clean
+- probe_notepad 21/21 and probe_borrow 23/23 regression
+- worktree flow kept the shared tree on main throughout
+
+## What failed
+- cannot verify the fix end-to-end: income requires the agent to reach and fight trainers
+- which is wq#514/517 corridor work. Did not flip LPP_XP_GRIND=1 (orchestrator decision
+- changes live turn economics). Nugget-Bridge income flag
+
+--- aa9489d2 [process] 2026-08-13T05:15
+TITLE: wq#512 CLOSED: lane-boundary contract between github and pokemon lanes made mechanical — LANE_BOUNDARIES.md + canonical wq subsystems lpp-repo/lpp-tree/ccc-repo + lumen-pr shared-tree fence (auto --wo
+CONTENT: ## What changed
+- /home/lumen/agents/work-queue/LANE_BOUNDARIES.md (new)
+- /home/lumen/bin/wq CANON_SUBSYSTEMS (+lpp-repo
+- lpp-tree
+- ccc-repo
+- bak .pre_lpp_subs)
+- /home/lumen/bin/lumen-pr cmd_start fence (bak .pre_treefence)
+- subsystems on wq#494/498/499/507/509/512
+- board NOTE
+- reports/512_lane_boundaries.md
+
+## What worked
+- 4/4 tests pass: no-flag start auto-worktrees and leaves primary on main clean
+- --primary REFUSED with live sibling worktree
+- non-canonical subsystem still refused
+- syntax clean both files. Live proof: rabbit6 shipped wq#503 via worktree -> PR#3 -> squash-merge under the enforced ruleset with zero collision
+
+## What failed
+- none this pass. Root causes address
+
+--- cbc9b4de [tooling] 2026-08-13T05:03
+TITLE: wq#502 SHIPPED: wq agent identity made session-unique. 'wq whoami --register <base>' mints <base>-<6hex> exported as WQ_AGENT; claim/heartbeat/done/release/block/slock resolve identity from it. New ad
+CONTENT: ## What changed
+- /home/lumen/bin/wq
+- /home/lumen/bin/slock
+- queue.db(+agent_sessions)
+- _TEMPLATE/POKEMON/GITHUB/UNIFIED/ARTICLE_RESEARCH/FABLE_QUEUE dispatches
+- boards/GITHUB_QUEUE_PROGRESS.md(new)
+- scratch/wq502/probe_wq502.sh
+
+## What worked
+- probe 35/35 PASS on throwaway db
+- production-copy regression clean (integrity ok
+- 510 tasks
+- tasks/slocks cols identical)
+- OLD wq binary still list/show/add/claim/done on migrated db = zero downtime
+- live adoption of my own bare-name claim on #502
+- registered intruder refused on #502
+
+## What failed
+- First owner_ok ruleset (refuse only when BOTH sides registered) left a real hole: a registered session released a bare-name claim in regres
+
+--- 3682b51e [code-ship] 2026-08-13T03:46
+TITLE: wq#483 (M5c) PARTIAL, ticket left claimed: distributed Cable Club rendezvous state machine works — two independent processes both reach Trade Center $EF, 30s late-join recovers, mid-handshake disconne
+CONTENT: ## What changed
+- pokemon src/link/rendezvous.ts NEW
+- rdv_side.ts NEW
+- probe_rendezvous.ts NEW
+- tools/rdv-soak NEW
+- src/link/bridge.ts (disconnect fail-fast)
+- src/config.ts (CFG.rendezvous)
+- docs/multiplayer/M5_REMOTE_LINK.md — ALL UNCOMMITTED
+- lpp-git held by gh1 until 05:28Z
+- not forced
+
+## What worked
+- rendezvous happy path
+- late join
+- disconnect abort
+- bridge disconnect fix
+- tsc clean
+- probe_bridge 13/13 after change
+
+## What failed
+- continuation unstarted
+- happy path not stable under load — root-caused to passive-slave clock dependency
+- retry not implemented
+
+## Why / lessons
+wq#433 problem 2: remote sides cannot read each other, so arrival coordination becomes a real d
+
+--- d066d0c6 [code-ship] 2026-08-13T02:49
+TITLE: wq#488 shipped (62735de): LPP no-borrowed-content guard. DIAGNOSIS FIRST — mined 44 historical note payloads, found ZERO borrowed content; the borrowing Frank saw was a symptom of the guidance-inside-
+CONTENT: ## What changed
+- pokemon src/borrow_guard.ts NEW
+- src/probe_borrow.ts NEW
+- src/events.ts (+rule_violation)
+- src/live_agent.ts (sanitizer wiring)
+- lumen-pokemon-live restarted at HEAD 62735de
+
+## What worked
+- 23/23 probe
+- notepad 21/21
+- recovery 16/16
+- metrics 21/21
+- P0 verify pass
+- tsc clean
+- live T1-T2 with 0 violations and 0 brain errors
+
+## What failed
+- none
+- deploy briefly deferred by rabbit4 holding the service slock (waited
+- did not poach)
+
+## Why / lessons
+standing no-borrowed-code rule deserves an enforced guard even after the structural fix; diagnosis before patching per ticket
+
+
+--- 6dfc16dd [code-ship] 2026-08-13T02:38
+TITLE: wq#486 shipped (HEAD ddeb371): LPP notepad architecture. Root cause was slice(-1500) front-truncation with guidance spliced inside the capped string. Fix: separate GUIDANCE channel (harness->brain, ne
+CONTENT: ## What changed
+- pokemon: src/notepad.ts NEW
+- src/probe_notepad.ts NEW
+- src/agent.ts (pad field/note tool/buildMessages/sidecar)
+- src/prompt.ts (guidance arg + note doc)
+- src/live_agent.ts (shared bound pad
+- guidance channel for corridor/cerulean/stepbudget)
+- lumen-pokemon-live restarted under slock at ddeb371
+
+## What worked
+- probe_notepad 21/21
+- tsc clean
+- P0 verify pass
+- deployed active+turning T2 zero brain errors
+- sidecar carries notepad field
+
+## What failed
+- none
+- migration was a no-op (current run held no brain-authored notes
+- only guidance which relocates)
+
+## Why / lessons
+Frank: Lumen forgets everything on restart + copies corrupted guidance into notes; separate cha
+
+--- 974987bc [code-ship] 2026-08-13T01:16
+TITLE: wq#477 shipped: LPP whiteout/story-regression recovery — new src/recovery.ts (19-milestone corridor table + RecoveryTracker: whiteout edge clears on target map, score_regression clears on re-attaining
+CONTENT: ## What changed
+- pokemon: recovery.ts NEW
+- probe_recovery.ts NEW
+- agent.ts
+- live_agent.ts
+- events.ts
+- docs/WHITEOUT-RECOVERY.md
+- lumen-pokemon-live restarted under slock (rabbit2)
+
+## What worked
+- tsc clean
+- probe_recovery 16/16
+- probe_metrics 21/21
+- live: resumed map15
+- T1-T3
+- sidecar shows storyScore:6/maxStoryScore:6
+- correct frontier no-fire
+
+## What failed
+- none
+
+## Why / lessons
+post-whiteout wandering (Pewter museum trap) — storyScore from wq#471 gives a monotonic signal to detect and direct recovery; prompt-layer only to keep nav engine untouched
+
+
+--- 48e26625 [bugfix] 2026-08-12T19:38
+TITLE: LPP audit + regression fix: root-caused tablet metrics complaint (stale Aug-7 kiosk page, CONTINUES counting ~215 brain-outage crash-loop boots, resume-scorer sending run back to Pewter). Fixed resume
+CONTENT: ## What changed
+- src/resume.ts
+- src/stream.ts
+- checkpoints/archive-regressed-20260812/
+- lumen-pokemon-live restart
+- pokemon-kiosk restart (gameboy)
+
+## What worked
+- resume picked milestone-msm6hexl-map15-t120 exactly as simulated
+- tsc clean
+- push OK
+
+## What failed
+- GNOME blocks remote screenshot on gameboy (portal-only) - could not capture tablet screen directly
+
+## Why / lessons
+events-flag count is not monotonic story progress; incidental flags (museum NPCs) out-scored real progress once STORY_ORDER ran out. Any scorer using event flags needs rank to dominate on ranked maps. Kiosk pages must self-invalidate - long-lived browser sessions never re-fetch HTML.
+
+
+--- 6942d540 [hardware] 2026-08-12T04:50
+TITLE: CORESWITCH FULLY RECOVERED 2026-08-11. Dead SL-SWTGW2224AS 24-port (99.4% erased) restored to working web-managed 2.5G switch via full 16MB SPI write. Real root cause of all-night no-detect = bench su
+CONTENT: ## What changed
+- dead 24-port U7 W25Q128.V flashed+verified
+- switch now booting
+
+## What worked
+- 3.5V rail fixed detect
+- full write verified
+- switch boots+links+web UI up
+
+## What failed
+- Claude wasted hours on wrong color maps + wrong GND root-cause guess + false NM-caused hang panic
+
+## Why / lessons
+marginal Vcc = idle-high MISO; NM DHCP client flushes static on USB NIC
+
+
+===== PROC-CANDIDATES (3) =====
+
+--- e16fe161 [code-ship] 2026-08-14T04:11
+TITLE: wq#562 shipped: lpp-watchdog freeze-aware + deploy-attributable, landed to lumen-bin (PR #3 squash 5680a77); E6 made deterministic via fixture repo + LPP_WATCHDOG_STARTED_MS injection into deploy_drif
+CONTENT: ## What changed
+- lumen-bin sbin/lpp-watchdog.sh (new)
+- probe_wq562.py (new section G)
+- reports/562 appended
+- no service/timer touched
+
+## What worked
+- deterministic L831 discriminator with negative control
+- timing challenge answered structurally (Type=oneshot + OnUnitActiveSec=1min = no overlap possible)
+- flat-repo concern resolved by inspection (no hooks
+- ALLOW present
+- no path assumptions)
+
+## What failed
+- nothing
+- one trap pre-empted (fixture tools import would have false-red G1)
+
+## Why / lessons
+test root tooling in the root env (systemd-run, not sudo); a probe whose discriminating power depends on live fleet state is a probe by luck — inject the substrate
+
+
+--- 6985b374 [infra] 2026-08-13T06:15
+TITLE: Identity swap VERIFIED end-to-end: lumen-plays-pokemon now authenticates as RealLumenHere for both git push and GitHub API; all other repos unchanged on frankstupak
+CONTENT: ## What changed
+- verification only — no changes made this pass
+
+## What worked
+- resolve_github_token maps LPP -> RealLumenHere (github-lumen-classic.token) and CCC/lumen-content/Jay's repos -> frankstupak (agent/.env)
+- git credential fill in /home/lumen/pokemon returns username=RealLumenHere
+- classic PAT scopes repo+workflow
+- push=true admin=false on LPP
+- lumen-pr/lumen-ruleset/lumen-git-guard all source the resolver
+
+## What failed
+- resolve_github_token EXPORTS GITHUB_TOKEN and sets TOKEN_SOURCE rather than echoing the token — capturing it with tok=$(resolve_github_token X) returns empty and looks like a failure. Call it
+- then read $GITHUB_TOKEN.
+
+## Why / lessons
+Frank minted the c
+
+--- 39d58499 [session] 2026-08-13T05:33
+TITLE: github lane session: wq#495 (21 PR titles + 14 bodies de-blamed on Jay's repos, second person 0/0), wq#513 (keep-everything pass on 3 repos + sentinel allowlist, 3 standing violations cleared), wq#494
+CONTENT: ## What changed
+- 21 open PRs on SkinnnyJay/interview-prep + simpill-utils (titles+bodies only
+- no diffs)
+- READMEs/descriptions/topics on rom-transfer-tmp
+- lumen-agent
+- lumen-content
+- repo-visibility-sentinel allowlist
+- LPP .github/workflows/ci.yml
+- class-a-main ruleset now carries required_status_checks=typecheck strict=false
+- /home/lumen/bin/lumen-ruleset strict flag
+
+## What worked
+- lumen-pr full cycle worked end-to-end under enforcement (worktree -> conventional commit -> PR#6 -> green check -> squash merge -> branch auto-delete)
+- sentinel verified public=8 allow=8 violations=0
+- tsc --noEmit exit 0 on Node 22
+
+## What failed
+- claude CLI on Lumen reports loggedIn:false authMet

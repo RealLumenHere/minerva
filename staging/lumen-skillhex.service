@@ -1,0 +1,17 @@
+[Unit]
+Description=SkillHEX hypothesis loop over agent5 (evidence-grounded prompt mutation, human-gated; prop 5ccfeb0adf86)
+After=network-online.target redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/autonomy/agent5
+EnvironmentFile=/home/lumen/agent/.env
+ExecStart=/usr/bin/python3 /home/lumen/autonomy/agent5/skillhex.py --n 6
+TimeoutStartSec=3h
+MemoryMax=1G
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

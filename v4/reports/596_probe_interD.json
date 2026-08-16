@@ -1,0 +1,1 @@
+{"intra": 16, "inter_requested": 0, "torch_intra": 16, "torch_inter": 22, "n": 20, "p50_ms": 485.5, "mean_ms": 490.4, "min_ms": 296.1, "max_ms": 600.6}

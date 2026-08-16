@@ -1,0 +1,14 @@
+[Unit]
+Description=Entity-familiarity ingest from classified_intel (behavioral proxy, arXiv:2607.13568; prop fd2622e69837)
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/familiarity_scorer.py ingest
+TimeoutStartSec=10m
+MemoryMax=512M
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

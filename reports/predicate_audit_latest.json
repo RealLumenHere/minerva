@@ -1,0 +1,30 @@
+{
+  "run_id": 8,
+  "seed": 20260810,
+  "threshold": 0.5,
+  "ts": "2026-08-11T16:46:12.966431+00:00",
+  "models": {
+    "qwen36-local": {
+      "base_acc": 0.25,
+      "sensitivity": 0.5,
+      "specificity": 1.0,
+      "grounding": 0.5,
+      "errors": 7
+    },
+    "nephthys-qwen3-14b": {
+      "base_acc": 1.0,
+      "sensitivity": 1.0,
+      "specificity": 1.0,
+      "grounding": 1.0,
+      "errors": 0
+    },
+    "isis-qwen3-32b": {
+      "base_acc": 1.0,
+      "sensitivity": 1.0,
+      "specificity": 1.0,
+      "grounding": 1.0,
+      "errors": 0
+    }
+  },
+  "source": "predicate_audit.py arXiv:2607.13069"
+}

@@ -1,0 +1,10 @@
+[Unit]
+Description=Run predicate grounding audit every 6h (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=*-*-* 02,08,14,20:50:00 UTC
+Persistent=false
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

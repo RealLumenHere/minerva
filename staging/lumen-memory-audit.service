@@ -1,0 +1,15 @@
+[Unit]
+Description=pgvector embedding integrity/version-drift audit (prop 0658b2f0f457, wq#452)
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/memory_audit.py
+TimeoutStartSec=1h
+MemoryMax=512M
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

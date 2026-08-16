@@ -1,0 +1,101 @@
+{
+  "ts": "2026-08-10T05:27:32.660105+00:00",
+  "threshold": 0.5,
+  "statuses": [
+    "pending",
+    "accepted",
+    "deploy_ready",
+    "planned"
+  ],
+  "flags": [
+    {
+      "id": "67395ad51cac",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Benchmark Lumen's pgvector memory with MemArena tasks"
+    },
+    {
+      "id": "3236435a2e0f",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Add RAG-TESTER harness for pgvector retrieval eval"
+    },
+    {
+      "id": "1b44dd2b65a4",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Adopt AgentStream-style streaming eval harness for Minerva"
+    },
+    {
+      "id": "0e407ad8e148",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Add Pre-Output Validation Gate for Agent Responses"
+    },
+    {
+      "id": "72c2d1767cee",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Add LLM-based test generation and safety validation to Minerva eval pipeline"
+    },
+    {
+      "id": "a7f3c2417588",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Integrate GitNexus for Codebase-Aware Self-Improvement"
+    },
+    {
+      "id": "afddfedd2a23",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Integrate citation verification tool into memory pipeline"
+    },
+    {
+      "id": "573ae79a7c46",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Add reward-hacking detection heuristics to evaluator gate"
+    },
+    {
+      "id": "21454c8e2f63",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Implement learned reactive-vs-planning router selector"
+    },
+    {
+      "id": "60b9ac170d7f",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Integrate paper's memory indexing into research index pipeline"
+    },
+    {
+      "id": "4a518c4e703b",
+      "impact": "L",
+      "status": "planned",
+      "verify": null,
+      "reason": "no verification record",
+      "title": "Apply BC-250 40 CU unlock kernel patch to hapi blades"
+    }
+  ],
+  "warning_only": true
+}

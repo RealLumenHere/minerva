@@ -6,8 +6,11 @@
 # Backups / caches
 *.bak*
 *.bak.*
+.backups/
 __pycache__/
 *.pyc
+.venv/
+venv/
 # Generated / prose stores (contain fleet creds in places — restic covers them)
 archival/
 archive/
@@ -26,3 +29,13 @@ config/
 *.key
 *.pem
 *credential*
+
+# wq#656: raw data/prose corpora and runtime state, not source
+learnings.jsonl
+convo_learn.hwm
+factpack_cards.json
+v4/reports/fa_episode_failures.json
+
+# wq#656: superseded/stale candidate patches from other tickets, not shipped
+*.wq[0-9]*.new
+*.staged-wq[0-9]*

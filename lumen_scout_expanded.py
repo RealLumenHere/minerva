@@ -141,6 +141,101 @@ def fetch_reddit_source(source_cfg: Dict[str, Any], conn: sqlite3.Connection):
     except Exception as e:
         log.error(f"Reddit failed {src_name}: {e}")
 
+# ── X / Twitter via self-hosted twscrape (Lane A) ─────────────────────────
+TWSCRAPE_DB = "/home/lumen/minerva/twscrape_accounts.db"
+TWITTER_FETCH_LIMIT = 20
+
+# Feed health. "0 added" is normal (nothing new); "0 raw items fetched across
+# every handle" is the signature of the 2026-07-20 XClIdGen outage, which ran
+# silently for 6 days. Tracked so it can never go unnoticed again.
+_X_STATS = {"handles": 0, "resolved": 0, "fetched": 0, "errors": 0}
+_X_ALERT_STATE = "/home/lumen/minerva/logs/.scout_x_last_alert"
+
+def _alert_x_zero_yield():
+    """Fire once per 6h if X ingestion produced nothing at all."""
+    try:
+        import requests
+        now = time.time()
+        if os.path.exists(_X_ALERT_STATE) and now - os.path.getmtime(_X_ALERT_STATE) < 21600:
+            return
+        msg = (f"X scout zero-yield: {_X_STATS['handles']} handles, "
+               f"{_X_STATS['resolved']} resolved, {_X_STATS['fetched']} items, "
+               f"{_X_STATS['errors']} errors. Check for 'XClIdGen' in "
+               f"/home/lumen/minerva/logs/. Ref: twscrape_xclid_auth.py")
+        requests.post(os.getenv("NTFY_URL_ALERTS", "http://localhost:8080/lumen-updates"),
+                      data=msg.encode(),
+                      headers={"Title": "Minerva X scout DARK", "Priority": "high",
+                               "Tags": "warning"}, timeout=5)
+        with open(_X_ALERT_STATE, "w") as f:
+            f.write(str(now))
+    except Exception as e:
+        log.error(f"X zero-yield alert failed to send: {e}")
+
+async def _twitter_pull_async(username: str, limit: int) -> List[Dict[str, str]]:
+    """Pull recent tweets for one handle via the twscrape account pool."""
+    from twscrape import API, gather
+    import twscrape_xclid_auth
+    # Bootstrap x-client-transaction-id via an authenticated session; the
+    # upstream anonymous path is broken. See twscrape_xclid_auth.py + #320.
+    twscrape_xclid_auth.install(TWSCRAPE_DB)
+    api = API(TWSCRAPE_DB)
+    out: List[Dict[str, str]] = []
+    user = await api.user_by_login(username)
+    if user is None:
+        log.warning(
+            f"  X: @{username} not resolvable. Cause is NOT necessarily auth - "
+            f"check the log lines above for 'XClIdGen' (X web-build/header "
+            f"failure) vs an actual account error. Verify the pool with: "
+            f"twscrape --db {TWSCRAPE_DB} accounts"
+        )
+        return out
+    tweets = await gather(api.user_tweets(user.id, limit=limit))
+    for tw in tweets:
+        content = (tw.rawContent or "").strip()
+        if not content:
+            continue
+        link = getattr(tw, "url", None) or f"https://x.com/{username}/status/{tw.id}"
+        title = content.replace("\n", " ")[:140]
+        out.append({"title": title, "link": link, "text": content})
+    return out
+
+def fetch_twitter_source(source_cfg: Dict[str, Any], conn: sqlite3.Connection):
+    """X/Twitter source handler (Lane A: self-hosted twscrape). Sync wrapper
+    around an internal event loop, since twscrape is async-only."""
+    import asyncio
+    src_name = source_cfg.get("name", "X")
+    handle = source_cfg.get("handle", "").lstrip("@")
+    keywords = source_cfg.get("keywords", [])
+    self_rel = source_cfg.get("self_relevance", 0.85)
+    if not handle:
+        log.warning(f"  X: {src_name} has no handle, skipping")
+        return
+    try:
+        log.info(f"Fetching X: {src_name} (@{handle})...")
+        _X_STATS["handles"] += 1
+        items = asyncio.run(_twitter_pull_async(handle, TWITTER_FETCH_LIMIT))
+        if items:
+            _X_STATS["resolved"] += 1
+            _X_STATS["fetched"] += len(items)
+        count_added = 0
+        for it in items:
+            title, link, text = it["title"], it["link"], it["text"]
+            if not title or not link or is_duplicate(conn, src_name, title, link):
+                continue
+            if is_off_domain_junk(src_name, title):
+                _log_junk_drop(src_name, title, link)
+                continue
+            score, reason = score_by_keywords(title, text, keywords)
+            if score > 0.15 and insert_intel(conn, src_name, title, link, score * self_rel,
+                                             source_cfg.get("category", "misc"), reason):
+                count_added += 1
+                log.info(f"  + {title[:60]} (score={score:.2f})")
+        log.info(f"  {src_name}: {count_added} new")
+        time.sleep(RATE_LIMIT)
+    except Exception as e:
+        _X_STATS["errors"] += 1
+        log.error(f"X failed {src_name}: {e}")
+
 def main():
     log.info("="*70)
     log.info(f"SCOUT EXPANDED START ({len(ALL_SOURCES)} sources)")
@@ -149,8 +244,9 @@ def main():
     conn = ensure_db()
     rss_sources = {k: v for k, v in ALL_SOURCES.items() if v.get("type") == "rss"}
     reddit_sources = {k: v for k, v in ALL_SOURCES.items() if v.get("type") == "reddit"}
+    twitter_sources = {k: v for k, v in ALL_SOURCES.items() if v.get("type") == "twitter"}
     
-    log.info(f"RSS: {len(rss_sources)} | Reddit: {len(reddit_sources)}")
+    log.info(f"RSS: {len(rss_sources)} | Reddit: {len(reddit_sources)} | X: {len(twitter_sources)}")
     log.info("\n[RSS Feeds]")
     for src_id, src_cfg in rss_sources.items():
         fetch_rss_source(src_cfg, conn)
@@ -159,6 +255,17 @@ def main():
     for src_id, src_cfg in reddit_sources.items():
         fetch_reddit_source(src_cfg, conn)
     
+    log.info("\n[X/Twitter]")
+    for src_id, src_cfg in twitter_sources.items():
+        fetch_twitter_source(src_cfg, conn)
+
+    if _X_STATS["handles"]:
+        log.info(f"  X feed-health: {_X_STATS['resolved']}/{_X_STATS['handles']} handles "
+                 f"resolved, {_X_STATS['fetched']} raw items, {_X_STATS['errors']} errors")
+        if _X_STATS["fetched"] == 0:
+            log.error("X ZERO-YIELD: every handle returned nothing - X ingestion is DOWN")
+            _alert_x_zero_yield()
+
     conn.close()
     log.info("\n" + "="*70)
     log.info("SCOUT EXPANDED COMPLETE")

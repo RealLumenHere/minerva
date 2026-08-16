@@ -88,6 +88,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="Actually delete. Default is dry-run.")
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--max-delete", type=int, default=MAX_DELETE,
+                    help=f"Override the abort threshold for THIS run (default {MAX_DELETE}). 2026-07-19.")
     args = ap.parse_args()
 
     now = time.time()
@@ -131,10 +133,13 @@ def main():
           f"live_queue={skipped['skip_live_queue']}, unclassified={skipped['unclassified']}")
     print(f"Deletion candidates: {len(candidates)}")
 
-    if len(candidates) > MAX_DELETE:
-        print(f"ABORT: would delete {len(candidates)} files, which exceeds MAX_DELETE={MAX_DELETE}.")
+    if len(candidates) > args.max_delete:
+        print(f"ABORT: would delete {len(candidates)} files, which exceeds MAX_DELETE={args.max_delete}.")
         print("Review the candidate list manually before raising the limit.")
-        return 2
+        # Dry-run deletes nothing; the over-limit condition is a WARNING here, not a
+        # failure — exiting nonzero just marks the unit failed weekly with no action
+        # possible (2026-07-19 fix). --apply keeps the hard rc=2 rail.
+        return 2 if args.apply else 0
 
     if not candidates:
         print("Nothing to do.")

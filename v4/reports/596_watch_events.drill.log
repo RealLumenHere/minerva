@@ -1,0 +1,2 @@
+2026-08-14T23:09:07Z ROLLBACK applied — drop-in disabled. reason=wq596_rollback_drill
+2026-08-14T23:09:16Z ROLLBACK verify: health=200 pid=3359433 threads=12 OMP_NUM_THREADS=4 active=active

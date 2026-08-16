@@ -41,10 +41,79 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
     fail_str = '; '.join(failed or [])
     mm.log_event(kind, f'{summary} :: changed={"; ".join(changed or [])} :: failed={fail_str} :: {why}'[:3500],
                  ref=session_ref or nid)
+    # Failure Archaeology wire-in (2026-08-14, wq#590): a non-empty --failed
+    # auto-creates an fq ledger row. The data was always written; now something
+    # reads it. FAIL-OPEN: an episode commit must never die because the failure
+    # ledger did (fq itself skips noise-only 'none'/'nothing' entries).
+    if fail_str:
+        try:
+            import os as _os, subprocess as _sp
+            if _os.path.exists('/home/lumen/bin/fq'):
+                _sp.run(['/home/lumen/bin/fq', 'ingest-episode',
+                         '--episode-id', str(nid), '--summary', summary[:200],
+                         '--failed', fail_str[:1200], '--why', (why or '')[:400],
+                         '--ref', session_ref or ''],
+                        timeout=10, capture_output=True)
+        except Exception:
+            pass
+    # wq#576 outcome joiner: attribute this session's logged recall hits to this
+    # episode and label the session. FAIL-OPEN for the same reason as the fq
+    # wire-in above -- an episode commit must never die because salience did.
+    try:
+        import lumen_salience as _sal
+        _sal.label_outcome(nid, failed_str=fail_str, ref=session_ref)
+    except Exception:
+        pass
     return nid
 
 def recall(query, top_k=6):
+    # Memory V3 P2 (2026-08-07): hybrid indexed recall (dense+lex+graph+recency).
+    # A/B on 56-query golden set: R@1 .839->.911, R@5 .929->1.000, MRR .884->.943,
+    # +23ms p50. Rollback: MEMORY_V3_RECALL=0 (or search_v3 fail-opens to v2 itself).
+    import os
+    if os.environ.get('MEMORY_V3_RECALL', '1') != '0':
+        try:
+            from lumen_recall2 import search_v3
+            return search_v3(query, top_k=top_k)
+        except Exception as e:
+            # wq#465: a stderr line alone let a v3-wide outage run unnoticed for
+            # hours (every precheck fleet-wide silently degraded to v2 recall:
+            # R@1 .911 -> .839, and ~2x latency because the query is embedded
+            # twice). Fail LOUD: drop a breadcrumb the guard timer picks up, and
+            # honour MEMORY_V3_STRICT=1 for tests/CI that must not tolerate it.
+            print(f'[lumen_episode] v3 recall failed ({e}); falling back to v2',
+                  file=sys.stderr)
+            _breadcrumb_v3_failure(e)
+            if os.environ.get('MEMORY_V3_STRICT') == '1':
+                raise
     return mm.search(query, top_k=top_k, tiers=['recall', 'archival'])
+
+
+V3_FAIL_MARKER = '/home/lumen/minerva/logs/v3_recall_failure.json'
+
+
+def _breadcrumb_v3_failure(exc):
+    """Persist last v3 failure so memory_embed_guard.py can alarm on it.
+
+    Best-effort and never raises -- recall must not die because logging did.
+    """
+    try:
+        import json, os
+        from datetime import datetime, timezone
+        prev = {}
+        if os.path.exists(V3_FAIL_MARKER):
+            try:
+                with open(V3_FAIL_MARKER) as f:
+                    prev = json.load(f)
+            except Exception:
+                prev = {}
+        os.makedirs(os.path.dirname(V3_FAIL_MARKER), exist_ok=True)
+        with open(V3_FAIL_MARKER, 'w') as f:
+            json.dump({'last_error': f'{type(exc).__name__}: {exc}'[:400],
+                       'last_ts': datetime.now(timezone.utc).isoformat(),
+                       'count': int(prev.get('count', 0)) + 1}, f)
+    except Exception:
+        pass
 
 def precheck(plan):
     hits = recall(plan, top_k=8)
@@ -101,7 +170,9 @@ def backfill():
 def _fmt(h):
     k = (h.get('kind') or '').lower()
     mark = '\u26a0\ufe0f ' if k in FAILURE_KINDS else '  '
-    return f'{mark}[{h["tier"]}/{h.get("kind","")}] {h.get("score",0):.2f}  {h.get("title","")[:80]}'
+    ext = '[ext] ' if (h.get('trust') == 'external'
+                       or str(h.get('ref') or '').startswith('messenger:')) else ''  # P5 quarantine marker
+    return f'{mark}[{h["tier"]}/{h.get("kind","")}] {h.get("score",0):.2f}  {ext}{h.get("title","")[:80]}'
 
 def _main():
     ap = argparse.ArgumentParser()

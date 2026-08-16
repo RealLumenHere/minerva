@@ -1,0 +1,6 @@
+Decide if CLAIM is supported (stated or logically entailed) by CONTEXT only. Ignore outside knowledge; numbers, names and dates must match verbatim. Reason briefly, then end with a line EXACTLY of the form: SCORE=<x.xx>  where 1.00 = fully supported, 0.00 = contradicted or absent from context.
+
+CONTEXT:
+{context}
+
+CLAIM: {claim}

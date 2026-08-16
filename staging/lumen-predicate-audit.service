@@ -1,0 +1,16 @@
+[Unit]
+Description=Predicate-substitution grounding audit for local models (arXiv:2607.13069, prop 7a0fa9fabd92)
+After=network-online.target litellm.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/predicate_audit.py
+TimeoutStartSec=2h
+MemoryMax=1G
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

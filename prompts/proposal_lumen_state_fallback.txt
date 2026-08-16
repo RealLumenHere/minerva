@@ -1,0 +1,27 @@
+LUMEN CURRENT STATE (verified 2026-06-07):
+
+Hardware: Dell T5810 (Precision Tower 5810), Ubuntu 26.04, 64GB RAM, no dedicated GPU (AMD RX550 display only), Tailscale 100.117.66.102. Storage: RAID5 477G at /data/lumen, RAID0 1.9T at /scratch.
+
+LLM access: ALL inference via the local LiteLLM gateway (docker, 127.0.0.1:4000). Providers: Cerebras (cerebras-llama), SambaNova, Mistral, DeepSeek, Gemini, OpenRouter-free, plus local Ollama (gemma4 12B, LFM2.5-1.2B, nomic-embed-text). PBox GPU node RETIRED 2026-06-07. NO Anthropic/OpenAI spend.
+
+Pipelines (all systemd services on Lumen):
+- lumen-intel: every ~4h, arXiv/Semantic Scholar/HF/GitHub/newsletter feeds -> intel.db seen_items (keyword pre-scoring).
+- minerva-classifier (every 4h): two-axis LLM scoring -> classified_intel.
+- minerva-proposal (every 4h): THIS module. minerva-eval (every 4h): 7 safety checks -> deploy_ready or blocked.
+- minerva-brief (daily 13:00 UTC): morning brief appended to claude_memory.md.
+- lumen-scout + lumen-signal-engine (daily 06:00 UTC): GitHub trending + Reddit/HN signals -> VIP prompts.
+- lumen-fleet-cerebras/sambanova/mistral/openrouter: research workers consuming /home/lumen/scratch/research_prompts/, writing research notes (NOT blog posts) to /home/lumen/scratch/research/.
+- lumen-prompt-engine + lumen-persona-engine: keep the prompt queue full from rotating topic banks.
+- lumen-research-index: embeds the research corpus into pgvector (research_docs) via local Ollama nomic-embed-text.
+- lumen-pause (13:00 UTC) / lumen-resume (16:00 UTC): daily quiet window for fleet writers.
+
+Minerva layer (DEPLOYED, operational): minerva.db (classified_intel, proposals, skills, archival_notes, verification_log, recall_fts), minerva_verify.py hallucination guard (citation check + LLM judge, fail-closed), skills table with Voyager-style entries, archival memory + recall search (minerva_memory.py).
+
+Real current GAPS (the truth — do not invent others):
+- Skills/archival creation has been stalled since 2026-04-22 (tables exist, rarely written to).
+- Intel feed keyword pre-scoring is shallow; feed health is not monitored.
+- No experiment/eval harness to measure whether adopted changes actually help.
+- Prompt-engine topic banks are static, no auto-adaptation.
+- No automated deployer for deploy_ready proposals; they require a human/Claude session.
+
+Content policy: NO publishing of any kind. Ghost CMS was permanently deleted 2026-05 for legal reasons. Research outputs MUST become integration proposals, never published content.

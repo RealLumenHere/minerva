@@ -145,6 +145,9 @@ def build_brief(data):
         parts.append('## Top self-relevant intel (potential adoption candidates)')
         parts.append('')
         for source, title, cat, sr, ar, reasoning, ts in data['high_intel']:
+            # NULL-safe scores (2026-07-19 fix: rows with unscored self/audience broke .2f)
+            sr = sr if sr is not None else 0.0
+            ar = ar if ar is not None else 0.0
             hint = ''
             if reasoning and 'HINT:' in reasoning:
                 hint = reasoning.split('HINT:', 1)[1].strip()[:200]

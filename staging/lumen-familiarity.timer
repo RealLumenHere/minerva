@@ -1,0 +1,10 @@
+[Unit]
+Description=Entity-familiarity ingest every 6h (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=*-*-* 01,07,13,19:20:00 UTC
+Persistent=false
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

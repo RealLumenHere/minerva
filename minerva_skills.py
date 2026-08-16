@@ -38,12 +38,13 @@ def log(m):
 
 
 def embed(text):
-    """Get embedding for text via PBox Ollama."""
+    """Get embedding via local Ollama. timeout=90: nomic cold-load measured
+    44.3s (MAX_LOADED_MODELS=1 evicts it constantly); 15s silently failed."""
     try:
         r = requests.post(
             f'{LOCAL_OLLAMA}/api/embed',
-            json={'model': EMBED_MODEL, 'input': text[:4000]},
-            timeout=15,
+            json={'model': EMBED_MODEL, 'input': text[:4000], 'keep_alive': '30m'},
+            timeout=90,
         )
         if r.status_code != 200:
             log(f'  embed http {r.status_code}')

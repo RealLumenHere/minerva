@@ -1,0 +1,62 @@
+{
+  "ts": "2026-08-15T02:29:27Z",
+  "minerva_db_mtime": "2026-08-15T02:28:02Z",
+  "off": [
+    {
+      "name": "P1_prose_section",
+      "kind": "positive",
+      "query": "where is the nordlynx token stored",
+      "rank": null,
+      "tier": null,
+      "fed_rows_in_top10": 0
+    },
+    {
+      "name": "P2_session_archive",
+      "kind": "positive",
+      "query": "how was the vault failback to maat primary done",
+      "rank": null,
+      "tier": null,
+      "fed_rows_in_top10": 0
+    },
+    {
+      "name": "N1_planted_miss",
+      "kind": "negative",
+      "query": "what is the wq573 unladen swallow calibration constant on thoth",
+      "rank": null,
+      "tier": null,
+      "fed_rows_in_top10": 0
+    }
+  ],
+  "on": [
+    {
+      "name": "P1_prose_section",
+      "kind": "positive",
+      "query": "where is the nordlynx token stored",
+      "rank": 1,
+      "tier": "federated",
+      "fed_rows_in_top10": 6
+    },
+    {
+      "name": "P2_session_archive",
+      "kind": "positive",
+      "query": "how was the vault failback to maat primary done",
+      "rank": null,
+      "tier": null,
+      "fed_rows_in_top10": 2
+    },
+    {
+      "name": "N1_planted_miss",
+      "kind": "negative",
+      "query": "what is the wq573 unladen swallow calibration constant on thoth",
+      "rank": null,
+      "tier": null,
+      "fed_rows_in_top10": 1
+    }
+  ],
+  "verdicts": [
+    "P1_prose_section: OFF rank=None (want MISS) -> ON rank=1 tier=federated (want HIT/federated) : GREEN",
+    "P2_session_archive: OFF rank=None (want MISS) -> ON rank=None tier=None (want HIT/federated) : RED \u2014 CONTROL FAILED",
+    "N1_planted_miss: OFF rank=None ON rank=None (want MISS both) : GREEN"
+  ],
+  "controls_ok": false
+}

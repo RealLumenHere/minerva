@@ -23,6 +23,14 @@ CEREBRAS_KEY = os.getenv('CEREBRAS_API_KEY','')  # legacy, unused since 2026-06-
 LITELLM_URL = 'http://localhost:4000/v1/chat/completions'
 LITELLM_KEY = os.getenv('LITELLM_MASTER_KEY','')
 MODEL = os.getenv('MINERVA_MODEL', 'cerebras-oss-120b')
+CLASSIFY_TIMEOUT = int(os.getenv('CLASSIFY_TIMEOUT', '90'))
+# MODEL is a REASONING model. At max_tokens=400 it spent ~395 tokens on
+# reasoning and returned content=None with finish_reason='length' — no answer
+# at all. That single setting produced every no_json/empty_response failure and
+# the 123 "expected string or bytes-like object, got 'NoneType'" rows (re.search
+# on None). Measured 2026-07-27: 400 -> content None; 1200 -> clean JSON with
+# 255 reasoning + answer inside budget.
+CLASSIFY_MAX_TOKENS = int(os.getenv('CLASSIFY_MAX_TOKENS', '1200'))
 
 def log(m):
     ts = datetime.now(timezone.utc).strftime('%H:%M:%S UTC')
@@ -55,24 +63,59 @@ Content: {content}
 
 Return only the JSON object.'''
 
+def _failed(reason):
+    """A FAILED call is not a verdict.
+
+    Claude 2026-07-26: every error path used to return a well-formed result with
+    self_relevance=0.0, which persisted as if the model had judged the item
+    irrelevant. Because the proposal generator requires self>=0.6, any item whose
+    classify call timed out was silently and permanently disqualified. 1,228
+    LiteLLM read timeouts were buried this way. Callers must check 'failed' and
+    leave the item UNCLASSIFIED so a later run retries it."""
+    return {'audience_relevance':0.5,'self_relevance':0.0,'category':'news',
+            'reasoning':str(reason)[:200],'adoption_hint':'','failed':True}
+
 def classify_cerebras(item: dict) -> dict:
     if not LITELLM_KEY:
-        return {'audience_relevance':0.5,'self_relevance':0.0,'category':'news','reasoning':'no_key','adoption_hint':''}
+        return _failed('no_key')
     prompt = (PROMPT
             .replace('{source}', str(item.get('source',''))[:80])
             .replace('{title}', str(item.get('title',''))[:300])
             .replace('{content}', str(item.get('content','') or item.get('title',''))[:1500]))
     try:
-        r = requests.post(LITELLM_URL,
-            headers={'Authorization':f'Bearer {LITELLM_KEY}','Content-Type':'application/json'},
-            json={'model':MODEL,'messages':[{'role':'user','content':prompt}],'temperature':0.2,'max_tokens':400},
-            timeout=30)
+        # 30s was too tight for cerebras-oss-120b under load: 1,228 read
+        # timeouts recorded. Retry transient failures instead of burning the item.
+        r = None
+        for attempt, wait in enumerate((2, 5, 0)):
+            try:
+                r = requests.post(LITELLM_URL,
+                    headers={'Authorization':f'Bearer {LITELLM_KEY}','Content-Type':'application/json'},
+                    json={'model':MODEL,'messages':[{'role':'user','content':prompt}],
+                          'temperature':0.2,'max_tokens':CLASSIFY_MAX_TOKENS,
+                          # structurally prevents no_json, which was the single
+                          # largest failure mode here. minerva_verify already
+                          # carried this (aq#66); the classifier never got it.
+                          'response_format':{'type':'json_object'}},
+                    timeout=CLASSIFY_TIMEOUT)
+                if r.status_code == 200:
+                    break
+            except requests.exceptions.RequestException as e:
+                if not wait:
+                    return _failed(f'err:{e}')
+            if wait:
+                time.sleep(wait)
+        if r is None:
+            return _failed('no_response')
         if r.status_code != 200:
-            return {'audience_relevance':0.5,'self_relevance':0.0,'category':'news','reasoning':f'http_{r.status_code}','adoption_hint':''}
+            return _failed(f'http_{r.status_code}')
         txt = r.json()['choices'][0]['message']['content']
-        m = re.search(r'\{[\s\S]*\}', txt)
+        if not txt:
+            return _failed('empty_response')
+        # guard: re.search on None raised "expected string or bytes-like
+        # object, got 'NoneType'" and poisoned 123 rows.
+        m = re.search(r'\{[\s\S]*\}', str(txt))
         if not m:
-            return {'audience_relevance':0.5,'self_relevance':0.0,'category':'news','reasoning':'no_json','adoption_hint':''}
+            return _failed('no_json')
         obj = json.loads(m.group(0))
         return {
             'audience_relevance': max(0.0,min(1.0,float(obj.get('audience_relevance',0.5)))),
@@ -82,7 +125,7 @@ def classify_cerebras(item: dict) -> dict:
             'adoption_hint': obj.get('adoption_hint','')[:500],
         }
     except Exception as e:
-        return {'audience_relevance':0.5,'self_relevance':0.0,'category':'news','reasoning':f'err:{e}'[:200],'adoption_hint':''}
+        return _failed(f'err:{e}')
 
 def get_unprocessed_intel(limit=40):
     """Pull from lumen-intel intel.db items not yet classified."""
@@ -91,14 +134,24 @@ def get_unprocessed_intel(limit=40):
         return []
     # Pull recent items
     conn = sqlite3.connect(INTEL_DB)
-    cutoff = (datetime.now(timezone.utc)-timedelta(hours=48)).isoformat()
-    rows = conn.execute('SELECT id, source, title, score, ts FROM seen_items WHERE ts > ? ORDER BY ts DESC LIMIT ?', (cutoff, limit)).fetchall()
+    # Lookback is env-tunable so a backfill is a first-class operation.
+    # NOTE (Claude 2026-07-26): this window is a silent data-loss edge. Anything
+    # older than it is invisible to the classifier FOREVER — there is no catch-up
+    # pass. At ~100 items/day vs 240/day capacity (40 x 6 runs) that is fine, but
+    # a burst day (699 on 2026-07-16) can push items past the horizon unseen.
+    _hours = int(os.environ.get('INTEL_LOOKBACK_HOURS', '48'))
+    cutoff = (datetime.now(timezone.utc)-timedelta(hours=_hours)).isoformat()
+    # Filter already-classified in SQL. Previously LIMIT was applied FIRST and
+    # the classified set subtracted after, so a run asking for 100 could return
+    # ~50 usable rows and could never page back to an older backlog — the newest
+    # N are almost all already done. That made backlog recovery impossible.
+    conn.execute("ATTACH DATABASE ? AS m", (str(DB),))
+    rows = conn.execute(
+        'SELECT s.id, s.source, s.title, s.score, s.ts FROM seen_items s '
+        'WHERE s.ts > ? AND s.id NOT IN (SELECT id FROM m.classified_intel) '
+        'ORDER BY s.ts DESC LIMIT ?', (cutoff, limit)).fetchall()
     conn.close()
-    # Check which are already classified
-    conn = sqlite3.connect(DB)
-    classified_ids = set(r[0] for r in conn.execute('SELECT id FROM classified_intel').fetchall())
-    conn.close()
-    return [{'id':r[0],'source':r[1],'title':r[2],'content':r[2],'ts':r[4]} for r in rows if r[0] not in classified_ids]
+    return [{'id':r[0],'source':r[1],'title':r[2],'content':r[2],'ts':r[4]} for r in rows]
 
 def save_classification(item, result):
     conn = sqlite3.connect(DB)
@@ -108,7 +161,9 @@ def save_classification(item, result):
         (item['id'], item.get('source',''), item.get('title','')[:300], item.get('url',''),
          result['audience_relevance'], result['self_relevance'], result['category'],
          result['reasoning'] + (' | HINT: '+result['adoption_hint'] if result.get('adoption_hint') else ''),
-         datetime.now(timezone.utc).isoformat()))
+         # keep the SOURCE timestamp; stamping now() destroyed publication
+         # provenance and made per-day intake stats read as classify-date.
+         item.get('ts') or datetime.now(timezone.utc).isoformat()))
     conn.commit()
     conn.close()
 
@@ -120,8 +175,12 @@ def run(limit=40):
     fallbacks = 0
     for i, item in enumerate(items, 1):
         r = classify_cerebras(item)
-        if r['reasoning'].startswith(('http_', 'err:', 'no_key', 'no_json')):
+        if r.get('failed'):
+            # NOT saved: an unsaved item stays unclassified and is retried on the
+            # next run. Saving it would freeze self_relevance=0.0 forever.
             fallbacks += 1
+            log(f'  [{i}/{len(items)}] RETRY-LATER ({r["reasoning"][:60]}) {str(item.get("title",""))[:50]}')
+            continue
         save_classification(item, r)
         if r['self_relevance'] >= 0.6: high_self += 1
         log(f'  [{i}/{len(items)}] aud={r["audience_relevance"]:.2f} self={r["self_relevance"]:.2f} {r["category"]:12s} {item["title"][:60]}')

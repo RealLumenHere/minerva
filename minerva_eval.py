@@ -37,12 +37,12 @@ SAFETY_CHECKS = [
     ('6e30cf941b0c', {}, 'rogue_script_check'),                        # scan for rogue scripts
     ('ffe2be7bd03b', {'service_name': 'lumen-intel.service', 'minutes': 20}, 'intel_healthy'),
     ('ffe2be7bd03b', {'service_name': 'lumen-fleet-cerebras.service', 'minutes': 60}, 'fleet_cerebras_healthy'),
-    ('ffe2be7bd03b', {'service_name': 'lumen-fleet-sambanova.service', 'minutes': 60}, 'fleet_sambanova_healthy'),
     ('ffe2be7bd03b', {'service_name': 'lumen-fleet-mistral.service', 'minutes': 60}, 'fleet_mistral_healthy'),
     ('ffe2be7bd03b', {'service_name': 'lumen-fleet-openrouter.service', 'minutes': 60}, 'fleet_openrouter_healthy'),
 ]
 # NOTE 2026-06-10: ghost_backup check REMOVED (Ghost permanently deleted 2026-05).
 # fleet_pbox_healthy REMOVED (PBox permanently retired 2026-06-07).
+# fleet_sambanova_healthy REMOVED 2026-08-08 (SambaNova retired 2026-07-19 wq#381, 402 paywall; stale check was blocking 105/106 proposals).
 # fleet_openrouter_healthy ADDED (openrouter is an active fleet worker since 2026-06-07).
 
 
@@ -192,6 +192,18 @@ def run(limit=10):
     blocked = conn.execute("SELECT COUNT(*) FROM proposals WHERE status='blocked'").fetchone()[0]
     conn.close()
     log(f'=== Eval done. Ready-to-deploy: {ready} | Blocked: {blocked} ===')
+
+    # wq#456: rolling per-model error budget for quantized local rungs.
+    # WARN-ONLY + FAIL-OPEN: never affects proposal statuses or eval outcome.
+    # Disable with env MINERVA_ERROR_BUDGET=0.
+    if os.environ.get('MINERVA_ERROR_BUDGET', '1') != '0':
+        try:
+            import minerva_error_budget as _meb
+            _r = _meb.run()
+            log(f'error-budget: scored={_r.get("scored")} alerts={_r.get("alerts")}')
+        except Exception as _ebe:
+            log(f'error-budget check failed (fail-open, ignored): {_ebe}')
+
     return {'ready': ready, 'blocked': blocked}
 
 

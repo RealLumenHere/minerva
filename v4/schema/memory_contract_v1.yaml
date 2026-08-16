@@ -1,0 +1,67 @@
+# wq#575 §1.1 — frozen, versioned write contract for lumen-memoryd.
+# Read at daemon start; sha256 reported by /healthz and recorded in the report.
+# Editing this file changes the enforcement surface — treat as a gated change.
+version: 1
+
+tables:
+  archival_notes:
+    # A field NOT in writable_fields is ignored if a client sends it.
+    writable_fields: [kind, title, content, tags, source_ref]
+    server_owned: [id, created_at, origin, trust, agent_id, lane, content_sha256,
+                   schema_version, supersedes, superseded_by, revoked_at, revoked_reason]
+    enums:
+      # Closed set for NEW writes only (§1.5). The 58 legacy values are untouched;
+      # folding the singleton tail is a dream proposal, operator-applied.
+      kind: [session, code-ship, infra, research, incident, lesson, fix, deployment,
+             tooling, planning, analysis, audit, decision, config, ops, pathology,
+             prose-section, session-archive, fact-narrative]
+    limits: {title: 300, content: 8000, tags: 500, source_ref: 300}
+  state_facts:
+    writable_fields: [subject, predicate, value, valid_from, source_ref, confidence,
+                      half_life_days, fact_class, render_tier]
+    server_owned: [id, ingested_at, valid_to, invalidated_at, episode_id, last_confirmed_at]
+    limits: {subject: 120, predicate: 120, value: 2000, source_ref: 300}
+
+# §1.2 per-lane write contracts. "propose" = validated, stored in the proposal
+# queue, never in the live table. Unknown lane = reject (fail closed).
+lanes:
+  operator:     {archival_notes: write,   state_facts: write,   trust: operator}
+  memory:       {archival_notes: write,   state_facts: propose, trust: derived}
+  fleet:        {archival_notes: write,   state_facts: propose, trust: derived}
+  pokemon:      {archival_notes: write,   state_facts: propose, trust: derived}
+  fable:        {archival_notes: write,   state_facts: propose, trust: derived}
+  research:     {archival_notes: write,   state_facts: propose, trust: derived}
+  auto:         {archival_notes: write,   state_facts: propose, trust: derived}
+  github:       {archival_notes: write,   state_facts: propose, trust: derived}
+  user:         {archival_notes: reject,  state_facts: reject,  trust: derived}
+  dream:        {archival_notes: propose, state_facts: propose, trust: derived}
+  state-mirror: {archival_notes: write,   state_facts: write,   trust: derived}
+  convo-learn:  {archival_notes: write,   state_facts: reject,  trust: external}
+  # A registered agent session with no held wq claim. READS ONLY: reads are
+  # less dangerous than writes (§2.5) and blocking them would starve every
+  # lane prompt, which is the one thing _memory_context must never do. Writes
+  # stay closed so attribution (I-7) cannot be dodged by simply omitting it.
+  unattributed: {archival_notes: reject,  state_facts: reject,  trust: derived}
+
+limits:
+  embed_dim: 768
+  body_bytes: 65536
+  top_k_max: 50
+  future_skew_seconds: 60
+
+rates:
+  # per lane, sliding window, in-memory (§6.4). operator is unlimited.
+  writes_hour: 60
+  writes_day: 500
+  reads_hour: 600
+  concurrent: 8
+
+screen:
+  # §3.4 deterministic pattern screen, derived/external trust only. Redact-and-flag.
+  injection_markers:
+    - "(?i)ignore (all )?previous instructions"
+    - "(?i)disregard (the )?(above|prior|previous)"
+    - "(?i)you are now (a|an|in) "
+    - "(?i)<\\|im_start\\|>"
+    - "(?i)\\bsystem prompt\\b"
+    - "(?i)\\btool_call\\b"

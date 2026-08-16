@@ -1,0 +1,16 @@
+[Unit]
+Description=JudgeArena judge-agreement bench vs human labels (arXiv:2608.02620, prop 9455507d9aeb)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/home/lumen/judgearena/.venv/bin/python3 /home/lumen/minerva/judgearena_bench.py
+TimeoutStartSec=4h
+MemoryMax=4G
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

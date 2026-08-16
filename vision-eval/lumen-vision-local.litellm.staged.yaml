@@ -1,0 +1,24 @@
+# STAGED LiteLLM alias for wq#299 — NOT applied. Frank-gated.
+# Append this block to /home/lumen/agent/litellm_config.yaml under model_list,
+# mirroring the lumen-vision entry. NOT in router_settings.fallbacks (fail loud;
+# a vision consumer must never silently reroute to a text model).
+#
+# minicpm-v4.6 is served by ollama on Nephthys (100.98.74.87:11434), pulled
+# 2026-07-17 (wq#299). Non-thinking + JSON: pass "/no_think " prefix in the
+# prompt and set response format json at the call site (ollama format=json).
+#
+# CAVEAT (see report): CPU latency ~24s/image on Nephthys. Only wire local-first
+# routing if that latency is acceptable for the batch/async path; the interactive
+# copilot /diagnose path should stay on lumen-vision (1-3s).
+
+  - model_name: lumen-vision-local
+    litellm_params:
+      model: ollama/minicpm-v4.6
+      api_base: http://100.98.74.87:11434
+      # ollama vision via LiteLLM: images passed as OpenAI image_url data URIs.
+      # Set drop_params so unsupported openai fields are dropped for ollama.
+      drop_params: true
+      timeout: 180
+    model_info:
+      mode: chat
+      supports_vision: true

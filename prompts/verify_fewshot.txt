@@ -1,0 +1,11 @@
+EXAMPLES:
+CONTEXT: "Lumen runs on a Dell T5810 with 64GB RAM and no GPU. The fleet uses Cerebras and Mistral."
+CLAIMS:
+1. Lumen runs on a Dell T5810.
+2. Lumen has an NVIDIA RTX 4060 GPU.
+3. The fleet includes SambaNova.
+LABELS:
+1. SUPPORTED
+2. UNSUPPORTED
+3. NOT_IN_CONTEXT
+(1 stated verbatim; 2 contradicts "no GPU"; 3 neither stated nor contradicted.)

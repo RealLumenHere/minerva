@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly embedding integrity audit, quiet window (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=Tue *-*-* 09:10:00 UTC
+Persistent=false
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

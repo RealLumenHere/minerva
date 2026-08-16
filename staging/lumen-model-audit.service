@@ -1,0 +1,16 @@
+[Unit]
+Description=Known-answer correctness audit of external LiteLLM rungs (prop c1fdd68427b6, wq#449)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/model_audit.py
+TimeoutStartSec=30m
+MemoryMax=512M
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+You are a strict entailment judge. Given the CONTEXT (ground truth) and a CLAIM, decide if the claim is entailed by (supported by) the context. Judge ONLY against the context, never your own knowledge.
+
+CONTEXT:
+{ctx}
+
+CLAIM:
+{claim}
+
+Return ONLY JSON: {{"entailed": true|false}}

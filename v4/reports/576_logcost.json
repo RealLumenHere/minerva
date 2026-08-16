@@ -1,0 +1,86 @@
+{
+ "ts": "2026-08-15T05:47:58Z",
+ "n_queries": 40,
+ "golden": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+ "db_mtime_before": 1786772754.3854017,
+ "db_mtime_after": 1786772878.5925732,
+ "db_moved_during_run": true,
+ "effective_config": {
+  "MEMORY_V4_HITLOG": "0",
+  "MEMORY_V4_MEMORYD": "1"
+ },
+ "arms": [
+  {
+   "arm": "A_logging_off",
+   "hitlog": false,
+   "contended": false,
+   "n": 40,
+   "effective_config": {
+    "MEMORY_V4_HITLOG": "0",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "e2e_p50_ms": 171.65,
+   "e2e_p95_ms": 188.89,
+   "e2e_mean_ms": 171.57,
+   "write_p50_ms": null,
+   "write_p95_ms": null,
+   "write_max_ms": null,
+   "contender_writes": 0
+  },
+  {
+   "arm": "B_logging_on",
+   "hitlog": true,
+   "contended": false,
+   "n": 40,
+   "effective_config": {
+    "MEMORY_V4_HITLOG": "1",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "e2e_p50_ms": 177.23,
+   "e2e_p95_ms": 219.28,
+   "e2e_mean_ms": 180.98,
+   "write_p50_ms": 7.218,
+   "write_p95_ms": 10.792,
+   "write_max_ms": 13.015,
+   "contender_writes": 0
+  },
+  {
+   "arm": "C_logging_on_contended",
+   "hitlog": true,
+   "contended": true,
+   "n": 40,
+   "effective_config": {
+    "MEMORY_V4_HITLOG": "1",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "e2e_p50_ms": 694.87,
+   "e2e_p95_ms": 1439.52,
+   "e2e_mean_ms": 851.71,
+   "write_p50_ms": 9.01,
+   "write_p95_ms": 63.598,
+   "write_max_ms": 188.016,
+   "contender_writes": 2360
+  },
+  {
+   "arm": "D_logging_off_contended",
+   "hitlog": false,
+   "contended": true,
+   "n": 40,
+   "effective_config": {
+    "MEMORY_V4_HITLOG": "0",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "e2e_p50_ms": 746.41,
+   "e2e_p95_ms": 2247.74,
+   "e2e_mean_ms": 880.19,
+   "write_p50_ms": null,
+   "write_p95_ms": null,
+   "write_max_ms": null,
+   "contender_writes": 2462
+  }
+ ],
+ "p50_delta_ms_B_minus_A": 5.58,
+ "p50_delta_ms_C_minus_D_contended": -51.54,
+ "p50_budget_ms": 400,
+ "verdict": "PASS"
+}

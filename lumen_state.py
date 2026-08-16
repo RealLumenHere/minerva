@@ -44,6 +44,32 @@ VOLATILE_HALFLIFE = {
     'listing': 7, 'auction_state': 3, 'auction_end': 3, 'stock': 7,
 }
 
+# ── Memory V3 P1: fact classification (write-time) ──────────────────────────
+import re as _re
+IDENTITY_PREDS = {'hardware', 'role', 'status', 'lan_ip', 'tailscale_ip',
+                  'tailscale_hostname', 'location', 'ssh_user', 'os', 'user',
+                  'mac', 'cpu', 'ram', 'storage', 'gpu', 'model', 'port', 'url'}
+_STATUSISH = _re.compile(r'(status|state|result|assessment|next_steps|blocker|'
+                         r'calibration|recovery|attempt|incident)')
+
+def _classify_fact(predicate, value):
+    """Return (fact_class, render_tier). Mirrors the 0003 backfill heuristic:
+    core = short identity facts (<=280) or any short fact (<=140); everything
+    else is topic (on-demand via `current <subject>` / FULL render)."""
+    vlen = len(value)
+    if vlen > 500:
+        fc = 'narrative'
+    elif predicate in IDENTITY_PREDS:
+        fc = 'identity'
+    elif _STATUSISH.search(predicate):
+        fc = 'status'
+    else:
+        fc = 'config'
+    # thresholds tuned 2026-08-07 against live corpus: identity<=240 / other<=120
+    # renders ~3.8K tok (soft cap 4K) with growth headroom. See eval sweep in P1 episode.
+    tier = 'core' if ((predicate in IDENTITY_PREDS and vlen <= 240) or vlen <= 120) else 'topic'
+    return fc, tier
+
 def _migrate(conn):
     """Add nullable columns if missing (SQLite has no ADD COLUMN IF NOT EXISTS):
     half_life_days (decay rate) and last_confirmed_at (evidence-refresh anchor).
@@ -131,6 +157,15 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
     if half_life_days is None:
         half_life_days = VOLATILE_HALFLIFE.get(predicate)
 
+    # ── Memory V3 P1: fact classification + render tier (write-time) ─────────
+    # core -> injected LIVE_FLEET_STATE block; topic -> on-demand (`current <subj>`,
+    # LIVE_FLEET_STATE_FULL.md). Values >280 chars get a stderr nudge: long prose
+    # belongs in an episode (lumen_episode.py commit) with a short fact pointing at it.
+    _fc, _tier = _classify_fact(predicate, value)
+    if len(value) > 280:
+        print(f'[lumen_state] NOTE: value is {len(value)} chars (>280) -> render_tier=topic. '
+              f'Prefer a short fact + full story as an episode.', file=sys.stderr)
+
     cur = conn.execute(
         'SELECT * FROM state_facts WHERE subject=? AND predicate=? AND valid_to IS NULL',
         (subject, predicate))
@@ -162,10 +197,11 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
             '''INSERT INTO state_facts
                (id, subject, predicate, value, valid_from, valid_to,
                 ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-                last_confirmed_at, episode_id)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                last_confirmed_at, episode_id, fact_class, render_tier)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (fid, subject, predicate, value, valid_from, open_row['valid_from'],
-             now, now, source_ref, confidence, half_life_days, now, episode_id))
+             now, now, source_ref, confidence, half_life_days, now, episode_id,
+             _fc, _tier))
         conn.commit()
         res = {'action': 'historical_insert', 'subject': subject, 'predicate': predicate,
                'value': value, 'note': 'older-than-current; inserted as closed historical row, open row unchanged',
@@ -184,9 +220,10 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
         '''INSERT INTO state_facts
            (id, subject, predicate, value, valid_from, valid_to,
             ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-            last_confirmed_at, episode_id)
-           VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?)''',
-        (fid, subject, predicate, value, valid_from, now, source_ref, confidence, half_life_days, now, episode_id))
+            last_confirmed_at, episode_id, fact_class, render_tier)
+           VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?)''',
+        (fid, subject, predicate, value, valid_from, now, source_ref, confidence,
+         half_life_days, now, episode_id, _fc, _tier))
     conn.commit()
     res = {'action': action, 'subject': subject, 'predicate': predicate, 'value': value,
            'prior': (open_row['value'] if open_row else None)}
@@ -202,7 +239,8 @@ def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
     own = conn is None
     conn = conn or _conn()
     _migrate(conn)
-    q = ('SELECT subject,predicate,value,valid_from,source_ref,confidence,half_life_days,last_confirmed_at '
+    q = ('SELECT subject,predicate,value,valid_from,source_ref,confidence,half_life_days,last_confirmed_at,'
+         'fact_class,render_tier '
          'FROM state_facts WHERE valid_to IS NULL')
     p = []
     if subject:   q += ' AND subject=?';   p.append(subject.strip().lower())

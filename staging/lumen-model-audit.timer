@@ -1,0 +1,10 @@
+[Unit]
+Description=External-model correctness audit every 12h (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=*-*-* 03,15:40:00 UTC
+Persistent=false
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

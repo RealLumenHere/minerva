@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly judge-agreement bench (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=Sun *-*-* 06:15:00 UTC
+Persistent=false
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

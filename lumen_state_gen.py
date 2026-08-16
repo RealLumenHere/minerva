@@ -33,26 +33,46 @@ def _render_fact(f):
         return f"{base}  (conf {eff:.2f} — reconfirm)"
     return base
 
-def render():
-    # min_confidence=0.25 drops HARD-decayed volatile facts from the authoritative
-    # block (annotate/drop in the rendered .md ONLY -- never deleted from the DB).
+def render(tier='core'):
+    """Memory V3 P1 tiered render.
+    tier='core' -> injected LIVE_FLEET_STATE block: render_tier=core facts only,
+                   plus a footer listing subjects that have topic-tier detail.
+    tier='full' -> everything (LIVE_FLEET_STATE_FULL.md, on-demand/grep, NOT injected).
+    min_confidence=0.25 drops HARD-decayed volatile facts from the rendered .md
+    ONLY -- never deleted from the DB."""
     rows = current(min_confidence=0.25)
+    core_rows = [r for r in rows if (r.get('render_tier') or 'core') == 'core']
+    shown = rows if tier == 'full' else core_rows
     by_subj = {}
-    for r in rows:
+    for r in shown:
         by_subj.setdefault(r['subject'], []).append(r)
+    topic_subjects = sorted({r['subject'] for r in rows
+                             if (r.get('render_tier') or 'core') == 'topic'})
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     out = []
-    out.append('## LIVE FLEET STATE (bi-temporal, auto-generated) #CORE')
+    if tier == 'full':
+        out.append('## LIVE FLEET STATE — FULL (all tiers, auto-generated; NOT context-injected)')
+    else:
+        out.append('## LIVE FLEET STATE (bi-temporal, auto-generated) #CORE')
     out.append('')
     out.append(f'_Generated {now} from minerva.db state_facts (current slice = valid_to IS NULL)._  ')
     out.append('_Authoritative for current fleet facts. Never hand-edit; ingest via lumen_state.py and regenerate._')
+    if tier != 'full':
+        out.append('_Core tier only (short identity/status facts). Full detail per subject: '
+                   '`python3 /home/lumen/minerva/lumen_state.py current <subject>` or '
+                   '/home/lumen/minerva/context/LIVE_FLEET_STATE_FULL.md._')
     out.append('')
     for subj in sorted(by_subj):
         facts = sorted(by_subj[subj], key=lambda r: _key(r['predicate']))
         pairs = ', '.join(_render_fact(f) for f in facts)
         out.append(f'- **{subj}** — {pairs}')
     out.append('')
-    out.append(f'_{len(rows)} current facts across {len(by_subj)} subjects._')
+    if tier != 'full' and topic_subjects:
+        out.append(f'_{len(topic_subjects)} subjects carry topic-tier detail beyond this block '
+                   f'(coreswitch, minerva, hapi, 3dprinter, ...). ALWAYS `lumen_state.py current '
+                   f'<subject>` before working on a subject._')
+        out.append('')
+    out.append(f'_{len(shown)} facts shown ({len(rows)} current total) across {len(by_subj)} subjects._')
     return '\n'.join(out)
 
 if __name__ == '__main__':
@@ -61,5 +81,7 @@ if __name__ == '__main__':
     elif '--proposal-digest' in sys.argv:
         from lumen_proposal_digest import write_digest
         print(write_digest())
+    elif '--full' in sys.argv:
+        print(render(tier='full'))
     else:
         print(render())

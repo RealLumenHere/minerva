@@ -203,6 +203,14 @@ def main():
     upsert_batch(conn, batch)
     log.info(f"DONE files={len(files)} new={new} skip={skipped} err={err_c} elapsed={(time.time()-start)/60:.1f}min")
     conn.close()
+    # wq#309: chunk-level pass — research_chunks is the retrieval surface (tails embedded).
+    # Resumable + doc_hash-gated, so this only embeds chunks for new/changed docs.
+    try:
+        sys.path.insert(0, "/home/lumen/minerva/retrieval/wq309")
+        import chunk_reembed
+        chunk_reembed.main()
+    except Exception as e:
+        log.error(f"wq309 chunk pass failed (doc-level index unaffected): {e}")
     return 0
 
 if __name__ == "__main__":

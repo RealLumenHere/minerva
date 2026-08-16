@@ -1,0 +1,1409 @@
+{
+  "generated_at": "2026-08-14T22:29:37+00:00",
+  "host": "lumen",
+  "ticket": "wq#597",
+  "A_availability": {
+    "curated_n": 55,
+    "catch_latency": {
+      "surfaced_by_mechanism (monitor)": 3,
+      "discovered_late (agent)": 34,
+      "reached_frank": 17,
+      "never_caught": 1,
+      "unknown": 0
+    },
+    "source_dependency": {
+      "queue_state": 14,
+      "unclassified": 14,
+      "process_rule": 9,
+      "episode_store": 6,
+      "repo_git": 5,
+      "live_config_file": 5,
+      "runtime_probe": 4,
+      "hw_probe": 2,
+      "systemd_state": 2,
+      "state_store": 2,
+      "spendlogs": 2,
+      "plug_telemetry": 1
+    },
+    "core_injection_carries": {
+      "plug_telemetry": {
+        "grade": "absent",
+        "live_value_in_verify_block": false,
+        "matched_probes": [],
+        "merely_mentioned_in_prose": true
+      },
+      "systemd_state": {
+        "grade": "partial",
+        "live_value_in_verify_block": true,
+        "matched_probes": [
+          "(?:active|inactive|failed)\\s*\\(systemd\\)"
+        ],
+        "merely_mentioned_in_prose": true,
+        "caveat": "named-unit allowlist only: the block lists 4 named services; it does not enumerate failed units (the fq F9 SILENT_GAP mechanism)"
+      },
+      "live_config_file": {
+        "grade": "absent",
+        "live_value_in_verify_block": false,
+        "matched_probes": [],
+        "merely_mentioned_in_prose": true
+      },
+      "hw_probe": {
+        "grade": "absent",
+        "live_value_in_verify_block": false,
+        "matched_probes": [],
+        "merely_mentioned_in_prose": true
+      },
+      "spendlogs": {
+        "grade": "absent",
+        "live_value_in_verify_block": false,
+        "matched_probes": [],
+        "merely_mentioned_in_prose": true
+      },
+      "state_store": {
+        "grade": "absent",
+        "live_value_in_verify_block": false,
+        "matched_probes": [],
+        "merely_mentioned_in_prose": true
+      },
+      "episode_store": {
+        "grade": "partial",
+        "live_value_in_verify_block": true,
+        "matched_probes": [
+          "recent episodes"
+        ],
+        "merely_mentioned_in_prose": true,
+        "caveat": "top-6 episodes retrieved for the fixed query \"session start core context\", not for the work the session is about to do"
+      },
+      "queue_state": {
+        "grade": "partial",
+        "live_value_in_verify_block": true,
+        "matched_probes": [
+          "triage queue"
+        ],
+        "merely_mentioned_in_prose": true,
+        "caveat": "aq open COUNT only; no wq lane state, no fq open patterns"
+      },
+      "repo_git": {
+        "grade": "absent",
+        "live_value_in_verify_block": false,
+        "matched_probes": [],
+        "merely_mentioned_in_prose": true
+      },
+      "runtime_probe": {
+        "grade": "partial",
+        "live_value_in_verify_block": true,
+        "matched_probes": [
+          "\\b(?:200|302|404|503)\\b",
+          "in_recovery"
+        ],
+        "merely_mentioned_in_prose": true,
+        "caveat": "vault HA topology + one public HTTP code only; no arbitrary service probe"
+      }
+    },
+    "availability_at_boot": {
+      "scope": "records preventable by an ON-BOX DATA LOOKUP (process-discipline rules and unclassifiable rows excluded from the denominator \u2014 no memory system prevents \"run the host guard\")",
+      "data_lookup_records": 32,
+      "strict_full_grade": 0,
+      "strict_rate": 0.0,
+      "generous_full_or_partial": 22,
+      "generous_rate": 0.688,
+      "process_rule_records": 9,
+      "unclassified_records": 14,
+      "of_curated_total": 55
+    },
+    "core_bytes": 64764,
+    "verify_block_bytes": 1631,
+    "per_record": [
+      {
+        "fq": 1,
+        "class": "F3",
+        "occurred": "2026-08-13",
+        "caught_by": "frank",
+        "sources": [
+          "plug_telemetry",
+          "repo_git"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 2,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "frank",
+        "sources": [
+          "live_config_file"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 3,
+        "class": "F5",
+        "occurred": "2026-08-13",
+        "caught_by": "frank",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 4,
+        "class": "F10",
+        "occurred": "2026-08-13",
+        "caught_by": "frank",
+        "sources": [
+          "live_config_file"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 5,
+        "class": "F2",
+        "occurred": "2026-08-13",
+        "caught_by": "frank",
+        "sources": [
+          "hw_probe"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 6,
+        "class": "F9",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "systemd_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 7,
+        "class": "F6",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 8,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 9,
+        "class": "F11",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "live_config_file"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 10,
+        "class": "F12",
+        "occurred": "2026-03-09",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 11,
+        "class": "F6",
+        "occurred": "2026-03-29",
+        "caught_by": "agent",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 12,
+        "class": "F6",
+        "occurred": "2026-07-03",
+        "caught_by": "agent",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 13,
+        "class": "F7",
+        "occurred": "2026-06-16",
+        "caught_by": "agent",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 14,
+        "class": "F7",
+        "occurred": "2026-07-11",
+        "caught_by": "frank",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 15,
+        "class": "F7",
+        "occurred": "2026-07-09",
+        "caught_by": "agent",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 16,
+        "class": "F2",
+        "occurred": "2026-07-05",
+        "caught_by": "agent",
+        "sources": [
+          "state_store"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 17,
+        "class": "F9",
+        "occurred": "2026-08-08",
+        "caught_by": "frank",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 18,
+        "class": "F9",
+        "occurred": "2026-08-12",
+        "caught_by": "agent",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 19,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "monitor",
+        "sources": [
+          "repo_git"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 20,
+        "class": "F10",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 21,
+        "class": "F11",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 22,
+        "class": "F9",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "repo_git"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 23,
+        "class": "F9",
+        "occurred": "2026-07-16",
+        "caught_by": "agent",
+        "sources": [
+          "systemd_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 24,
+        "class": "F9",
+        "occurred": "2026-08-11",
+        "caught_by": "never",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 25,
+        "class": "F9",
+        "occurred": "2026-08-13",
+        "caught_by": "monitor",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 26,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "spendlogs",
+          "runtime_probe"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 27,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 28,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 29,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "repo_git",
+          "runtime_probe"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 30,
+        "class": "F6",
+        "occurred": "2026-04-26",
+        "caught_by": "frank",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 31,
+        "class": "F1",
+        "occurred": "2026-07-13",
+        "caught_by": "frank",
+        "sources": [
+          "runtime_probe"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 32,
+        "class": "F11",
+        "occurred": "2026-06-25",
+        "caught_by": "monitor",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 33,
+        "class": "F4",
+        "occurred": "2026-06-25",
+        "caught_by": "agent",
+        "sources": [
+          "process_rule"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 34,
+        "class": "F6",
+        "occurred": "2026-07-05",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 35,
+        "class": "F1",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 36,
+        "class": "F9",
+        "occurred": "2026-08-10",
+        "caught_by": "agent",
+        "sources": [
+          "episode_store"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 37,
+        "class": "F5",
+        "occurred": "2026-07-19",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 38,
+        "class": "F3",
+        "occurred": "2026-07-16",
+        "caught_by": "agent",
+        "sources": [
+          "hw_probe",
+          "spendlogs"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 39,
+        "class": "F12",
+        "occurred": "2026-07-01",
+        "caught_by": "agent",
+        "sources": [
+          "episode_store"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 40,
+        "class": "F8",
+        "occurred": "2026-08-12",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 41,
+        "class": "F4",
+        "occurred": "2026-07-01",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 42,
+        "class": "F6",
+        "occurred": "2026-07-12",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 43,
+        "class": "F7",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state",
+          "repo_git"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 44,
+        "class": "F9",
+        "occurred": "2026-07-20",
+        "caught_by": "agent",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 45,
+        "class": "F9",
+        "occurred": "2026-06-03",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 46,
+        "class": "F9",
+        "occurred": "2026-05-27",
+        "caught_by": "agent",
+        "sources": [
+          "runtime_probe"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 47,
+        "class": "F9",
+        "occurred": "2026-06-09",
+        "caught_by": "frank",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 48,
+        "class": "F2",
+        "occurred": "2026-06-07",
+        "caught_by": "agent",
+        "sources": [
+          "state_store"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 49,
+        "class": "F9",
+        "occurred": "2026-06-01",
+        "caught_by": "agent",
+        "sources": [
+          "unclassified"
+        ],
+        "boot_grade": "absent"
+      },
+      {
+        "fq": 558,
+        "class": "F1",
+        "occurred": "2026-08-14",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 559,
+        "class": "F1",
+        "occurred": "2026-08-14",
+        "caught_by": "agent",
+        "sources": [
+          "episode_store",
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 560,
+        "class": "F10",
+        "occurred": "2026-08-14",
+        "caught_by": "agent",
+        "sources": [
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 561,
+        "class": "F9",
+        "occurred": "2026-08-14",
+        "caught_by": "agent",
+        "sources": [
+          "episode_store",
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 562,
+        "class": "F12",
+        "occurred": "2026-08-14",
+        "caught_by": "frank",
+        "sources": [
+          "live_config_file",
+          "episode_store",
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      },
+      {
+        "fq": 568,
+        "class": "F1",
+        "occurred": "2026-08-14",
+        "caught_by": "agent",
+        "sources": [
+          "live_config_file",
+          "episode_store",
+          "queue_state"
+        ],
+        "boot_grade": "partial"
+      }
+    ]
+  },
+  "B_correctness": {
+    "open_facts": 666,
+    "dup_open_subject_predicate": {
+      "n": 0,
+      "note": "structurally 0: idx_sf_one_open is a UNIQUE index on (subject,predicate) WHERE valid_to IS NULL. Intra-predicate conflict cannot exist; the real conflict surface is cross-predicate and store-vs-file."
+    },
+    "cross_predicate_ram_conflicts": [
+      {
+        "subject": "khepri",
+        "values_gb": {
+          "24": [
+            "hw"
+          ],
+          "64": [
+            "ram"
+          ]
+        }
+      }
+    ],
+    "cross_predicate_ip_conflicts": [],
+    "config_fact_vs_source_file_mtime": {
+      "stale_regular_file_only": 20,
+      "facts_naming_a_local_path": 108,
+      "facts_naming_a_path_not_on_this_host": 22,
+      "stale_n": 37,
+      "stale": [
+        {
+          "subject": "ab_rag",
+          "predicate": "status",
+          "path": "/home/lumen/ab_rag/ab_rag_controller.py",
+          "path_is_dir": false,
+          "file_mtime": "2026-07-19 06:44",
+          "fact_asserted": "2026-07-12",
+          "days_behind": 6.3
+        },
+        {
+          "subject": "anthropic_subscription",
+          "predicate": "auth_method",
+          "path": "/home/lumen/agent/.env",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-13 06:29",
+          "fact_asserted": "2026-07-28",
+          "days_behind": 15.3
+        },
+        {
+          "subject": "anthropic_subscription",
+          "predicate": "claude_code_auth_state",
+          "path": "/home/lumen/.claude/.credentials.json",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-13 14:26",
+          "fact_asserted": "2026-07-29",
+          "days_behind": 14.6
+        },
+        {
+          "subject": "article_research_queue",
+          "predicate": "mechanism",
+          "path": "/home/lumen/agents/work-queue/ARTICLE_RESEARCH_DISPATCH.md",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-13 05:01",
+          "fact_asserted": "2026-07-09",
+          "days_behind": 34.2
+        },
+        {
+          "subject": "bes",
+          "predicate": "vm_backup",
+          "path": "/home/lumen/services/backup/scripts/backup-important.sh",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 04:25",
+          "fact_asserted": "2026-07-19",
+          "days_behind": 25.2
+        },
+        {
+          "subject": "coreswitch",
+          "predicate": "firmware_kit",
+          "path": "/home/lumen/firmware/sodola-sl-swtgw2224as/",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-02 03:50",
+          "fact_asserted": "2026-07-17",
+          "days_behind": 15.2
+        },
+        {
+          "subject": "ebay-api",
+          "predicate": "backup",
+          "path": "/home/lumen/secrets",
+          "path_is_dir": true,
+          "file_mtime": "2026-07-17 06:40",
+          "fact_asserted": "2026-07-13",
+          "days_behind": 3.3
+        },
+        {
+          "subject": "fleet",
+          "predicate": "power_dashboard_cost_engine",
+          "path": "/home/lumen/power-dash/staged/",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-08 03:36",
+          "fact_asserted": "2026-07-17",
+          "days_behind": 21.2
+        },
+        {
+          "subject": "fleet",
+          "predicate": "power_dashboard_inventory_exporter",
+          "path": "/home/lumen/power-dash/staged/power_inventory_export.py",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-08 03:36",
+          "fact_asserted": "2026-07-17",
+          "days_behind": 21.2
+        },
+        {
+          "subject": "gitea",
+          "predicate": "setup",
+          "path": "/home/lumen/agent/.env",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-13 06:29",
+          "fact_asserted": "2026-07-10",
+          "days_behind": 33.3
+        },
+        {
+          "subject": "github-identity",
+          "predicate": "push-credential",
+          "path": "/home/lumen/pokemon",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 06:00",
+          "fact_asserted": "2026-08-13",
+          "days_behind": 0.3
+        },
+        {
+          "subject": "github_pat",
+          "predicate": "status",
+          "path": "/home/lumen/.git-credentials",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 22:03",
+          "fact_asserted": "2026-08-10",
+          "days_behind": 3.9
+        },
+        {
+          "subject": "litellm",
+          "predicate": "database",
+          "path": "/home/lumen/agent/.env",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-13 06:29",
+          "fact_asserted": "2026-07-10",
+          "days_behind": 33.3
+        },
+        {
+          "subject": "lpp-multiplayer",
+          "predicate": "milestone_m3_trade",
+          "path": "/home/lumen/pokemon",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 06:00",
+          "fact_asserted": "2026-08-10",
+          "days_behind": 3.3
+        },
+        {
+          "subject": "lumen",
+          "predicate": "backup_drive_wq330",
+          "path": "/home/lumen",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 22:08",
+          "fact_asserted": "2026-07-20",
+          "days_behind": 24.9
+        },
+        {
+          "subject": "lumen",
+          "predicate": "backup_repos_health",
+          "path": "/scratch/restic-cache",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-08 08:30",
+          "fact_asserted": "2026-07-19",
+          "days_behind": 19.4
+        },
+        {
+          "subject": "lumen",
+          "predicate": "dc_handle_store",
+          "path": "/home/lumen/uplift/dc-handle-store/",
+          "path_is_dir": true,
+          "file_mtime": "2026-07-19 04:01",
+          "fact_asserted": "2026-07-10",
+          "days_behind": 8.2
+        },
+        {
+          "subject": "lumen",
+          "predicate": "disk_hygiene_agent",
+          "path": "/home/lumen/logs/volume-sizes.tsv",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 11:31",
+          "fact_asserted": "2026-08-11",
+          "days_behind": 2.5
+        },
+        {
+          "subject": "lumen",
+          "predicate": "learnings_archive",
+          "path": "/home/lumen/personas",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 20:33",
+          "fact_asserted": "2026-07-20",
+          "days_behind": 24.9
+        },
+        {
+          "subject": "lumen",
+          "predicate": "news_digest_model",
+          "path": "/home/lumen/agent/lumen_news_digest.py",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-10 02:58",
+          "fact_asserted": "2026-07-13",
+          "days_behind": 27.1
+        },
+        {
+          "subject": "lumen",
+          "predicate": "storage_probe",
+          "path": "/home/lumen/agents/storage_manifest.yaml",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-13 22:08",
+          "fact_asserted": "2026-08-08",
+          "days_behind": 4.9
+        },
+        {
+          "subject": "lumen-ebay-watch",
+          "predicate": "status",
+          "path": "/home/lumen/bin",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 22:03",
+          "fact_asserted": "2026-07-13",
+          "days_behind": 31.9
+        },
+        {
+          "subject": "lumen-plays-pokemon",
+          "predicate": "github_identity",
+          "path": "/home/lumen/bin/lumen-github-identity.sh",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 17:08",
+          "fact_asserted": "2026-08-13",
+          "days_behind": 0.7
+        },
+        {
+          "subject": "memory_v3",
+          "predicate": "p0_baseline",
+          "path": "/home/lumen/minerva/eval/recall_golden.jsonl",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 19:45",
+          "fact_asserted": "2026-08-07",
+          "days_behind": 6.8
+        },
+        {
+          "subject": "memory_v3",
+          "predicate": "p3_status",
+          "path": "/home/lumen/instincts.yaml",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 03:00",
+          "fact_asserted": "2026-08-07",
+          "days_behind": 6.1
+        },
+        {
+          "subject": "messenger",
+          "predicate": "import_path_policy",
+          "path": "/home/lumen/messenger",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 22:29",
+          "fact_asserted": "2026-08-11",
+          "days_behind": 2.9
+        },
+        {
+          "subject": "messenger",
+          "predicate": "speaker_identity",
+          "path": "/home/lumen/messenger/speaker_identity.py",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 03:22",
+          "fact_asserted": "2026-08-10",
+          "days_behind": 3.1
+        },
+        {
+          "subject": "messenger",
+          "predicate": "spend_tracker_shadowing",
+          "path": "/home/lumen/agent",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 22:00",
+          "fact_asserted": "2026-08-11",
+          "days_behind": 2.9
+        },
+        {
+          "subject": "minerva",
+          "predicate": "bc250_intel_alerting",
+          "path": "/home/lumen/scratch/research/",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 22:21",
+          "fact_asserted": "2026-07-30",
+          "days_behind": 14.9
+        },
+        {
+          "subject": "minerva",
+          "predicate": "schema_migrations",
+          "path": "/home/lumen/minerva/migrations/",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-14 03:08",
+          "fact_asserted": "2026-07-10",
+          "days_behind": 34.1
+        },
+        {
+          "subject": "mp61_firmware",
+          "predicate": "bootrom_dump_isis",
+          "path": "/home/lumen/backups/mp61-rom/",
+          "path_is_dir": true,
+          "file_mtime": "2026-07-16 23:15",
+          "fact_asserted": "2026-07-13",
+          "days_behind": 3.0
+        },
+        {
+          "subject": "p12",
+          "predicate": "firmware",
+          "path": "/home/lumen/esphome/p12.yaml",
+          "path_is_dir": false,
+          "file_mtime": "2026-07-19 05:56",
+          "fact_asserted": "2026-07-17",
+          "days_behind": 1.2
+        },
+        {
+          "subject": "repo-visibility-sentinel",
+          "predicate": "status",
+          "path": "/home/lumen/agents/repo-visibility-sentinel/allowlist.txt",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-14 02:03",
+          "fact_asserted": "2026-08-13",
+          "days_behind": 0.1
+        },
+        {
+          "subject": "sambanova",
+          "predicate": "api_status",
+          "path": "/home/lumen/retired-units/",
+          "path_is_dir": true,
+          "file_mtime": "2026-07-20 04:40",
+          "fact_asserted": "2026-07-19",
+          "days_behind": 0.2
+        },
+        {
+          "subject": "sentinel",
+          "predicate": "sshauth_probe",
+          "path": "/home/lumen/services/sentinel/probe_ed25519",
+          "path_is_dir": false,
+          "file_mtime": "2026-07-01 05:32",
+          "fact_asserted": "2026-06-30",
+          "days_behind": 0.2
+        },
+        {
+          "subject": "sia",
+          "predicate": "provision_status",
+          "path": "/etc/netplan/",
+          "path_is_dir": true,
+          "file_mtime": "2026-08-03 04:52",
+          "fact_asserted": "2026-07-11",
+          "days_behind": 22.2
+        },
+        {
+          "subject": "tapo-fleet",
+          "predicate": "control_cli",
+          "path": "/home/lumen/bin/plug-ctl",
+          "path_is_dir": false,
+          "file_mtime": "2026-08-10 06:21",
+          "fact_asserted": "2026-07-19",
+          "days_behind": 21.3
+        }
+      ]
+    },
+    "confirm_coverage": {
+      "narrative": {
+        "n": 107,
+        "never_confirmed": 3
+      },
+      "config": {
+        "n": 400,
+        "never_confirmed": 49
+      },
+      "identity": {
+        "n": 134,
+        "never_confirmed": 47
+      },
+      "status": {
+        "n": 25,
+        "never_confirmed": 3
+      }
+    },
+    "golden_v4": {
+      "artifact": "/home/lumen/minerva/eval/results_wq597_20260814_2220.json",
+      "label": "wq597",
+      "ts": "2026-08-14T22:20:56Z",
+      "scoring_semantics": "wq595",
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.728,
+        "R@5": 0.874,
+        "R@10": 0.921,
+        "MRR": 0.793
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.0,
+        "R@5": 0.0,
+        "R@10": 0.0,
+        "MRR": 0.0
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.72,
+        "R@5": 0.876,
+        "R@10": 0.927,
+        "MRR": 0.79
+      },
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+      "golden_is_frozen_snapshot": true,
+      "effective_engine": "v3",
+      "owner": "wq#572/#595 instrument, invoked not forked"
+    },
+    "planted_positive_control": {
+      "control_db": "/tmp/w597_plant.db",
+      "went_red": true,
+      "planted_detected": [
+        {
+          "subject": "thothtest",
+          "values_gb": {
+            "32": [
+              "hw"
+            ],
+            "16": [
+              "ram"
+            ]
+          }
+        }
+      ],
+      "note": "no clean sweep is trusted until it has gone red on a plant (fq F1 x4)"
+    }
+  },
+  "C_retention": {
+    "title_jaccard_experiment": {
+      "verdict": "REJECTED as a re-derivation instrument \u2014 see scorecard C. It clusters TEMPLATED SERIAL WORK (per-util uplift ships, corrector auto-fixes, factory route-adds), which is legitimate throughput, and it misses every labelled F7/F12 case, whose titles share no vocabulary. Reported as a negative control, not as a number.",
+      "clusters": 4,
+      "episodes_in_clusters": 32
+    },
+    "episode_corpus_n": 1096,
+    "episodes_scored": 1096,
+    "jaccard_threshold": 0.5,
+    "repeat_clusters": 4,
+    "episodes_in_repeat_clusters": 32,
+    "redundant_episode_sessions": 28,
+    "redundancy_rate": 0.026,
+    "top_clusters": [
+      {
+        "n_episodes": 11,
+        "n_distinct_days": 2,
+        "span_days": 1,
+        "first": "2026-07-02",
+        "last": "2026-07-03",
+        "titles": [
+          "simpill uplift #2: uuid util shipped, PR #2 to SkinnnyJay/simpill-utils",
+          "simpill uplift #3: resilience util shipped, PR #3 to SkinnnyJay/simpill-utils",
+          "simpill uplift #4: cache util shipped, PR #4 to SkinnnyJay/simpill-utils",
+          "simpill uplift #5: http util shipped, PR #5 to SkinnnyJay/simpill-utils",
+          "simpill uplift #6: async util shipped, PR #6 to SkinnnyJay/simpill-utils",
+          "simpill uplift #7: crypto util shipped, PR #7 to SkinnnyJay/simpill-utils"
+        ]
+      },
+      {
+        "n_episodes": 8,
+        "n_distinct_days": 6,
+        "span_days": 17,
+        "first": "2026-07-02",
+        "last": "2026-07-19",
+        "titles": [
+          "lumen-corrector auto-fixed: fixed /home/lumen/minerva/context/sections/027_5-software-stack-services.md:14 [re",
+          "lumen-corrector auto-fixed: fixed /home/lumen/minerva/context/sections/028_5-software-stack-services.md:14 [re",
+          "lumen-corrector auto-fixed: fixed /home/lumen/minerva/context/sections/026_5-software-stack-services.md:14 [re",
+          "lumen-corrector auto-fixed: fixed /home/lumen/minerva/context/sections/042_github_ssh_key_import.md:5 [retired",
+          "lumen-corrector auto-fixed: fixed /home/lumen/minerva/context/sections/047_github_ssh_key_import.md:5 [retired",
+          "lumen-corrector auto-fixed: fixed /home/lumen/minerva/context/sections/027_5-software-stack-services.md:14 [re"
+        ]
+      },
+      {
+        "n_episodes": 7,
+        "n_distinct_days": 2,
+        "span_days": 1,
+        "first": "2026-07-03",
+        "last": "2026-07-04",
+        "titles": [
+          "simpill uplift session: array util shipped, PR #18 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJay/",
+          "simpill uplift: function util shipped, PR #19 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJay/simpi",
+          "simpill uplift: misc util shipped, PR #21 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJay/simpill-u",
+          "simpill uplift: middleware util shipped, PR #22 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJay/sim",
+          "simpill uplift: adapters util shipped, PR #26 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJay/simpi",
+          "simpill uplift session B: react util shipped, PR #37 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJa"
+        ]
+      },
+      {
+        "n_episodes": 6,
+        "n_distinct_days": 3,
+        "span_days": 3,
+        "first": "2026-08-09",
+        "last": "2026-08-12",
+        "titles": [
+          "factory APPLIED plan 651eeee0d84b (litellm_route_add) for proposal d1236da18a04: route lumen-lfm2.5-2.6b live,",
+          "factory APPLIED plan 66c1225f29f4 (litellm_route_add) for proposal c09ec6956c3e: route kimik3-0.4b-local live,",
+          "factory APPLIED plan 9d8a5c13deca (litellm_route_add) for proposal 35d9bd9b9aab: route bge-m3 live, backup /ho",
+          "factory APPLIED plan f670e6ad6b97 (litellm_route_add) for proposal 7f850c3507af: route mistral-7b live, backup",
+          "factory APPLIED plan 9b1e27701071 (litellm_route_add) for proposal ff1b28774b47: route claude-opus-5 live, bac",
+          "factory APPLIED plan 7af47ecf15bc (litellm_route_add) for proposal 6b968210c9a8: route grok-4.6 live, backup /"
+        ]
+      }
+    ],
+    "labelled_F7_F12": [
+      {
+        "fq": 10,
+        "class": "F12",
+        "occurred": "2026-03-09",
+        "caught_by": "frank",
+        "summary": "Agent published 25 posts despite Frank's explicit repeated STOP directive from two prior sessions; DAILY_POST_CAP=1 pres"
+      },
+      {
+        "fq": 13,
+        "class": "F7",
+        "occurred": "2026-06-16",
+        "caught_by": "agent",
+        "summary": "Two parallel writer sessions on tiny-whale created duplicate /log pages and then each removed the other's work mid-fligh"
+      },
+      {
+        "fq": 39,
+        "class": "F12",
+        "occurred": "2026-07-01",
+        "caught_by": "agent",
+        "summary": "Multiple sessions pursued the mcpw stateful/session-affinity path before it was reframed as a proven dead end \u2014 the dead"
+      },
+      {
+        "fq": 15,
+        "class": "F7",
+        "occurred": "2026-07-09",
+        "caught_by": "agent",
+        "summary": "Claim race: two agents claimed the same simpill-uplift ticket before atomic claims existed."
+      },
+      {
+        "fq": 14,
+        "class": "F7",
+        "occurred": "2026-07-11",
+        "caught_by": "frank",
+        "summary": "Systemic duplicate work across parallel Claude sessions in the constrained Fable window; prose ownership ('wq#N owned by"
+      },
+      {
+        "fq": 43,
+        "class": "F7",
+        "occurred": "2026-08-13",
+        "caught_by": "agent",
+        "summary": "Agent ID collision in the github lane \u2014 two workers under one identity corrupted claim attribution; drove the whoami reg"
+      },
+      {
+        "fq": 562,
+        "class": "F12",
+        "occurred": "2026-08-14",
+        "caught_by": "frank",
+        "summary": "wq#572 worker session ended without wq done/block, without an episode commit, and without a report \u2014 leaving the campaig"
+      }
+    ],
+    "self_reported_rederivation": {
+      "episodes_scanned": 1096,
+      "episodes_with_marker": 12,
+      "marker_rate": 0.011,
+      "samples": [
+        {
+          "id": "7ad10a876ab5",
+          "date": "2026-07-03",
+          "title": "simpill-uplift claim-race: two parallel agents both did 'events' this session; sibling committed+pus",
+          "marker": "duplicate work",
+          "context": "e either claimed - so the claim line was overwritten by the sibling's DONE line. Wasted a duplicate work-cycle. ## Why / lessons simpill-uplift pipeline needs an atomic per-util claim (e.g. mkdir lockdir, or git-b"
+        },
+        {
+          "id": "d0ffa009fb79",
+          "date": "2026-07-03",
+          "title": "simpill uplift: object util shipped as PR #17 (SkinnnyJay/simpill-utils). Fixed 2 CVE-class prototyp",
+          "marker": "already done",
+          "context": "s object was topmost open util in QUEUE.md; parallel agent had claimed algorithms/crypto (already done). Grounded pollution fixes in Snyk CVEs + MDN/PortSwigger; array-path parity in lodash/es-toolkit/dot-prop "
+        },
+        {
+          "id": "60d11e8dd441",
+          "date": "2026-07-03",
+          "title": "simpill uplift: annotations util shipped, PR #27 to SkinnnyJay/simpill-utils (https://github.com/Ski",
+          "marker": "already done",
+          "context": " / lessons queue-topmost open util per SOP; parallel agent had claimed algorithms/crypto (already done) + api/factories, annotations was topmost unclaimed "
+        },
+        {
+          "id": "cfb8a9e2f68a",
+          "date": "2026-07-03",
+          "title": "simpill uplift: env util shipped, PR #29 to SkinnnyJay/simpill-utils (https://github.com/SkinnnyJay/",
+          "marker": "redid",
+          "context": "sion (uncommitted WIP, no PR) \u2014 archived WIP to /tmp/env-stale-wip.patch, reset worktree, redid from frozen ref per string-PR#16 precedent (never trust unverified stale heads). Also unassigned stale logger"
+        },
+        {
+          "id": "b86e45f3828a",
+          "date": "2026-07-04",
+          "title": "interview-prep uplift session 1: algorithms shipped, PR #1 to SkinnnyJay/interview-prep (first PR on",
+          "marker": "re-derive",
+          "context": "autocomplete) on pristine upstream. ## Why / lessons Frozen-ref dissection + independent re-derive beat trusting the stale WIP patch; single-shot benchmarks lie under JIT "
+        },
+        {
+          "id": "eaeb80f3afac",
+          "date": "2026-07-05",
+          "title": "Messenger session t111: reconciled stale Scribe tasks + shipped PDF text extraction (task #89)",
+          "marker": "already shipped",
+          "context": ">in_progress) ## What worked - verified 83(search/history)/84(export)/85(pins)/86(stats) already shipped t107-t110 + working via API - PDF extraction E2E verified (marker token landed in chat store) - messenger res"
+        },
+        {
+          "id": "6e5a2cf65183",
+          "date": "2026-07-10",
+          "title": "Deep research + planning for Day 3: VERIFIED HANDOFF #1-3 stale (HA scripts already hardened + 2nd c",
+          "marker": "already done",
+          "context": "rity against live state before writing the plan \u2014 three of four inherited priorities were already done or dead-ended "
+        },
+        {
+          "id": "108f5e121855",
+          "date": "2026-07-14",
+          "title": "Staged final 2 Fable packs: mp61-gpub-power (DESIGN-ONLY, tickets 218-221, ~30-40W fleet target) + m",
+          "marker": "re-derivation",
+          "context": "ch hide-method reclaims MEASURED watts safely across warm reboot - fail-safe rollout) not re-derivation - miko3 pack bundles the 256KB gd32_dump for MCU-id + FAT-vs-raw + asset-table before opening the toy ## Wha"
+        },
+        {
+          "id": "215c143a405a",
+          "date": "2026-07-17",
+          "title": "f5web1 session RETIRED by Frank. Closed #197 (concurrency-audit verified) + #202 (agent5 A/B, HOLD 4",
+          "marker": "already done",
+          "context": "ewel ## What failed - initial dep-gated list was stale (read before re-query - #185/#189 already done overnight) ## Why / lessons STAGE-only floor means build tickets can't roll to fleet regardless of incident;"
+        },
+        {
+          "id": "a24e0e0c2e79",
+          "date": "2026-07-17",
+          "title": "Frank stick-directive executed: Lumen storage topology fully verified (boot=970 PRO nvme4 whole chai",
+          "marker": "re-derive",
+          "context": "ree+findmnt+smartctl verification ## What failed - (none) ## Why / lessons Frank: never re-derive this again "
+        },
+        {
+          "id": "a9a05834a1fc",
+          "date": "2026-07-28",
+          "title": "Pinned Anthropic access policy (Max 20x, OAuth not API) across four durable layers",
+          "marker": "re-derive",
+          "context": "ecting agents on this. Root cause: it is a NEGATIVE fact (no API entitlement) that agents re-derive wrongly from an ambiguous rule. 'No Anthropic API spend' was being read as 'avoid Claude' - which pushed agen"
+        },
+        {
+          "id": "2f8852bc927e",
+          "date": "2026-08-10",
+          "title": "aq triage batch post-wq: resolved 12 alerts. lumen-agent watchdog kill 08-09 11:15 self-recovered (R",
+          "marker": "re-derivation",
+          "context": "d - wq#462 user-lane added ## What worked - state store had the whole enp0s25 story \u2014 no re-derivation needed - messenger thinking-pin pattern reused verbatim ## What failed - first digest retry still 408d until"
+        }
+      ],
+      "note": "SELF-REPORTED lower bound: only counts re-derivation an agent noticed and wrote down. Silent re-derivation is invisible to this measure by construction."
+    },
+    "spend_frame": {
+      "available": true,
+      "calls": 127607,
+      "total_spend_usd": 38.5887,
+      "mean_spend_per_call_usd": 0.000302,
+      "days_covered": 36,
+      "mean_spend_per_day_usd": 1.0719,
+      "note": "fleet LLM spend only (LiteLLM-routed). Claude-Code work rides the Max subscription and is NOT priced here, so dollar attribution of re-derivation is a floor, not a total."
+    }
+  },
+  "D_context_economy": {
+    "tokenizer": "tiktoken cl100k_base",
+    "claude_memory_md": {
+      "bytes": 487381,
+      "tokens": 138505
+    },
+    "index_md": {
+      "bytes": 31626,
+      "tokens": 11182
+    },
+    "core_injection": {
+      "tokens": 19929,
+      "seconds": 0.0
+    },
+    "topic_query": {
+      "query": "ollama memory policy on lumen",
+      "tokens": 14711,
+      "seconds": 10.4,
+      "rc": 0
+    },
+    "multiplier_full_over_core": 6.9,
+    "multiplier_full_over_topic": 9.4,
+    "bulk_read_lower_bound": {
+      "episodes_mentioning_claude_memory_md": 35,
+      "episodes_matching_bulk_read_pattern": 0,
+      "fq_F8_records": 1,
+      "note": "LOWER BOUND ONLY. Nothing logs reads of claude_memory.md; this counts self-reported mentions in the episode corpus. See scorecard D2 for the instrumentation that would make this a real rate."
+    }
+  }
+}

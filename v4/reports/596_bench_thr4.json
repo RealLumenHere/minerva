@@ -1,0 +1,70 @@
+{
+  "ticket": "wq#596",
+  "label": "baseline_thr4",
+  "ts_utc": "2026-08-14T21:59:21Z",
+  "pool_size": 20,
+  "corpus_rows": 882,
+  "runs": [
+    {
+      "run": 1,
+      "n": 20,
+      "p50_ms": 623.3,
+      "mean_ms": 607.5,
+      "min_ms": 462.3,
+      "max_ms": 678.8
+    },
+    {
+      "run": 2,
+      "n": 20,
+      "p50_ms": 645.4,
+      "mean_ms": 653.4,
+      "min_ms": 488.7,
+      "max_ms": 775.7
+    },
+    {
+      "run": 3,
+      "n": 20,
+      "p50_ms": 656.7,
+      "mean_ms": 651.2,
+      "min_ms": 504.7,
+      "max_ms": 791.9
+    }
+  ],
+  "p50_of_run_p50s": 645.4,
+  "effective_config_before": {
+    "main_pid": "3013234",
+    "env": {
+      "HF_HUB_OFFLINE": "1",
+      "RERANK_MODEL": "tomaarsen/ms-marco-ettin-17m-reranker",
+      "OMP_NUM_THREADS": "4",
+      "MKL_NUM_THREADS": "4",
+      "OPENBLAS_NUM_THREADS": "4",
+      "NUMEXPR_NUM_THREADS": "4",
+      "TOKENIZERS_PARALLELISM": "false"
+    },
+    "threads": 13,
+    "rss_kb": 781060,
+    "health": "{\"ok\":true,\"model\":\"tomaarsen/ms-marco-ettin-17m-reranker\",\"uptime_s\":899.0}",
+    "drop_ins": "20-model.conf\nresource-caps.conf",
+    "memory_high": "1073741824",
+    "memory_max": "1572864000"
+  },
+  "effective_config_after": {
+    "main_pid": "3013234",
+    "env": {
+      "HF_HUB_OFFLINE": "1",
+      "RERANK_MODEL": "tomaarsen/ms-marco-ettin-17m-reranker",
+      "OMP_NUM_THREADS": "4",
+      "MKL_NUM_THREADS": "4",
+      "OPENBLAS_NUM_THREADS": "4",
+      "NUMEXPR_NUM_THREADS": "4",
+      "TOKENIZERS_PARALLELISM": "false"
+    },
+    "threads": 13,
+    "rss_kb": 793656,
+    "health": "{\"ok\":true,\"model\":\"tomaarsen/ms-marco-ettin-17m-reranker\",\"uptime_s\":939.4}",
+    "drop_ins": "20-model.conf\nresource-caps.conf",
+    "memory_high": "1073741824",
+    "memory_max": "1572864000"
+  }
+}

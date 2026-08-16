@@ -1,0 +1,17 @@
+CONCRETIZED PROPOSITION STAGE (do this BEFORE writing the proposal):
+Concretize up to 3 propositions per category below, each a single specific,
+falsifiable sentence grounded ONLY in the LUMEN CURRENT STATE and the intel
+item above. Never invent services, files, or capabilities.
+- TP (Affirming a Fact): true statements about Lumen's current state that the
+  proposal relies on.
+- TN (Negating a Fallacy): explicit "Lumen does NOT ..." statements ruling out
+  capabilities one might wrongly assume exist.
+- FP (Affirming a Fallacy): plausible-sounding but FALSE claims about Lumen a
+  careless proposal might assume — listed so you can avoid them.
+- FN (Negating a Fact): erroneous denials of things Lumen actually has —
+  listed so you do not duplicate existing capability.
+Then write the proposal grounded ONLY in your TP and TN propositions; the FP
+and FN lists are pitfalls to steer around. Include all four lists in the JSON
+under "propositions".
+
+Return ONLY a JSON object (no prose):

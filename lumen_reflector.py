@@ -93,6 +93,16 @@ def build_prompt(eps, dream, lines, sections):
         body = re.sub(r'\s+', ' ', e['content']).strip()[:700]
         block.append(f"- [{(e['created_at'])[:10]}] ({e['kind']}) {e['title']}\n    {body}")
     ep_text = '\n'.join(block) if block else '(no episodes recorded yet)'
+    # Ability/proficiency decomposition (prop ecbc3e3172b5) — flag-gated
+    # (A5_ABILITY_PROFICIENCY=1), fail-open '' when off/absent.
+    try:
+        import sys as _s; _s.path.insert(0, '/home/lumen/autonomy/agent5')
+        from ability_proficiency import reflector_context as _apc
+        ap = _apc()
+        if ap:
+            ep_text += '\n\n' + ap
+    except Exception:
+        pass
     return f'''You are Lumen's memory-consolidation reflector, running sleep-time and OFFLINE from the user.
 REFLECT on recent operational episodes and PROPOSE improvements to long-term memory. You do NOT
 apply anything; a human reviews and promotes. Be precise, skeptical, and concrete.
@@ -125,14 +135,29 @@ Return ONLY a JSON object, no prose, no markdown fences:
 
 
 def _post(prompt, key):
-    import requests
-    r = requests.post(
-        LITELLM_URL,
-        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
-        json={'model': REFLECT_MODEL, 'messages': [{'role': 'user', 'content': prompt}],
-              'temperature': TEMP, 'max_tokens': MAX_TOKENS,
-              'response_format': {'type': 'json_object'}},
-        timeout=180)
+    # 2026-08-02: was a bare requests.post(timeout=180) with NO network exception
+    # handling — one transient LiteLLM stall raised ReadTimeout straight out of
+    # main() and left lumen-reflector.service permanently failed (08-02 18:33).
+    # Now: 300s timeout, 3 tries, linear backoff. Same fix as lumen_news_digest.
+    import requests, time as _t
+    last = None
+    for attempt in range(3):
+        try:
+            r = requests.post(
+                LITELLM_URL,
+                headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+                json={'model': REFLECT_MODEL, 'messages': [{'role': 'user', 'content': prompt}],
+                      'temperature': TEMP, 'max_tokens': MAX_TOKENS,
+                      'response_format': {'type': 'json_object'}},
+                timeout=300)
+            break
+        except (requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError) as e:
+            last = e
+            if attempt < 2:
+                _t.sleep(10 * (attempt + 1))
+    else:
+        return None, f'network_after_3_tries: {last}'
     if r.status_code != 200:
         return None, f'http_{r.status_code}: {r.text[:200]}'
     txt = (r.json()['choices'][0]['message'].get('content') or '').strip()

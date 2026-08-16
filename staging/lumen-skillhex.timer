@@ -1,0 +1,10 @@
+[Unit]
+Description=SkillHEX hypothesis cycle 3x/week (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=Mon,Wed,Fri *-*-* 12:30:00 UTC
+Persistent=false
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

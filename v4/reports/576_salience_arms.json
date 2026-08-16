@@ -1,0 +1,398 @@
+{
+ "ts": "2026-08-15T05:51:29Z",
+ "golden": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+ "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+ "db_mtime_before": 1786772891.7225912,
+ "db_mtime_after": 1786773089.1818707,
+ "db_moved_during_arms": true,
+ "counter_coverage_at_run": {
+  "notes_with_counters": 25,
+  "raw_hit_rows": 1669,
+  "corpus_notes": 1223,
+  "oldest_hit": "2026-08-15T05:40:06.149392+00:00",
+  "coverage_pct": 2.04
+ },
+ "gate": "MRR up AND no class -2pts AND trap@1 not up AND abstention not down",
+ "control_arm": {
+  "label": "wq576_ctrl",
+  "artifact": "/home/lumen/minerva/eval/results_wq576_ctrl_20260815_0549.json",
+  "rc": 0,
+  "env_over": {
+   "MEMORY_V4_SALIENCE": "0"
+  },
+  "control_ok": true,
+  "R@1": 0.778,
+  "R@5": 0.912,
+  "R@10": 0.933,
+  "MRR": 0.836,
+  "n_headline": 239,
+  "trap_at1": 0.188,
+  "abstention": 0.5,
+  "federated_R@1": 0.0,
+  "lat_p50_ms": 187.6,
+  "per_class": {
+   "abstention": {
+    "R@1": 0.0,
+    "MRR": 0.0,
+    "n": 6
+   },
+   "build": {
+    "R@1": 0.909,
+    "MRR": 0.931,
+    "n": 33
+   },
+   "contradiction-resolution": {
+    "R@1": 0.6,
+    "MRR": 0.6,
+    "n": 5
+   },
+   "decision": {
+    "R@1": 0.839,
+    "MRR": 0.89,
+    "n": 31
+   },
+   "gotcha": {
+    "R@1": 0.818,
+    "MRR": 0.874,
+    "n": 44
+   },
+   "hardware": {
+    "R@1": 0.762,
+    "MRR": 0.825,
+    "n": 21
+   },
+   "knowledge-update": {
+    "R@1": 0.5,
+    "MRR": 0.583,
+    "n": 6
+   },
+   "milestone": {
+    "R@1": 1.0,
+    "MRR": 1.0,
+    "n": 1
+   },
+   "outage-rca": {
+    "R@1": 0.77,
+    "MRR": 0.823,
+    "n": 61
+   },
+   "procedure": {
+    "R@1": 0.649,
+    "MRR": 0.759,
+    "n": 37
+   },
+   "prose-section": {
+    "R@1": 0.0,
+    "MRR": 0.0,
+    "n": 7
+   },
+   "session-archive": {
+    "R@1": 0.0,
+    "MRR": 0.0,
+    "n": 3
+   }
+  },
+  "env_flags_recorded": {
+   "MEMORY_V4_SALIENCE": "0",
+   "MEMORY_V4_CALLER": "bench",
+   "MEMORY_V4_MEMORYD": "1"
+  },
+  "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+  "db_mtime": "2026-08-15T05:49:00Z"
+ },
+ "arms": [
+  {
+   "label": "wq576_use002",
+   "artifact": "/home/lumen/minerva/eval/results_wq576_use002_20260815_0549.json",
+   "rc": 0,
+   "env_over": {
+    "MEMORY_V4_SALIENCE": "1",
+    "MEMORY_V4_W_USE": "0.02",
+    "MEMORY_V4_W_WORTH": "0.0"
+   },
+   "control_ok": true,
+   "R@1": 0.77,
+   "R@5": 0.912,
+   "R@10": 0.933,
+   "MRR": 0.832,
+   "n_headline": 239,
+   "trap_at1": 0.188,
+   "abstention": 0.5,
+   "federated_R@1": 0.0,
+   "lat_p50_ms": 187.7,
+   "per_class": {
+    "abstention": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 6
+    },
+    "build": {
+     "R@1": 0.909,
+     "MRR": 0.931,
+     "n": 33
+    },
+    "contradiction-resolution": {
+     "R@1": 0.6,
+     "MRR": 0.6,
+     "n": 5
+    },
+    "decision": {
+     "R@1": 0.839,
+     "MRR": 0.888,
+     "n": 31
+    },
+    "gotcha": {
+     "R@1": 0.795,
+     "MRR": 0.863,
+     "n": 44
+    },
+    "hardware": {
+     "R@1": 0.762,
+     "MRR": 0.825,
+     "n": 21
+    },
+    "knowledge-update": {
+     "R@1": 0.5,
+     "MRR": 0.583,
+     "n": 6
+    },
+    "milestone": {
+     "R@1": 1.0,
+     "MRR": 1.0,
+     "n": 1
+    },
+    "outage-rca": {
+     "R@1": 0.77,
+     "MRR": 0.823,
+     "n": 61
+    },
+    "procedure": {
+     "R@1": 0.622,
+     "MRR": 0.745,
+     "n": 37
+    },
+    "prose-section": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 7
+    },
+    "session-archive": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 3
+    }
+   },
+   "env_flags_recorded": {
+    "MEMORY_V4_SALIENCE": "1",
+    "MEMORY_V4_W_USE": "0.02",
+    "MEMORY_V4_W_WORTH": "0.0",
+    "MEMORY_V4_CALLER": "bench",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+   "db_mtime": "2026-08-15T05:49:49Z",
+   "verdict": "REJECT",
+   "reasons": [
+    "MRR 0.832 <= control 0.836",
+    "class gotcha R@1 0.795 down >=2pts from 0.818",
+    "class procedure R@1 0.622 down >=2pts from 0.649"
+   ]
+  },
+  {
+   "label": "wq576_use005",
+   "artifact": "/home/lumen/minerva/eval/results_wq576_use005_20260815_0550.json",
+   "rc": 0,
+   "env_over": {
+    "MEMORY_V4_SALIENCE": "1",
+    "MEMORY_V4_W_USE": "0.05",
+    "MEMORY_V4_W_WORTH": "0.0"
+   },
+   "control_ok": true,
+   "R@1": 0.77,
+   "R@5": 0.908,
+   "R@10": 0.933,
+   "MRR": 0.831,
+   "n_headline": 239,
+   "trap_at1": 0.188,
+   "abstention": 0.5,
+   "federated_R@1": 0.0,
+   "lat_p50_ms": 190.7,
+   "per_class": {
+    "abstention": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 6
+    },
+    "build": {
+     "R@1": 0.909,
+     "MRR": 0.931,
+     "n": 33
+    },
+    "contradiction-resolution": {
+     "R@1": 0.6,
+     "MRR": 0.6,
+     "n": 5
+    },
+    "decision": {
+     "R@1": 0.839,
+     "MRR": 0.888,
+     "n": 31
+    },
+    "gotcha": {
+     "R@1": 0.795,
+     "MRR": 0.863,
+     "n": 44
+    },
+    "hardware": {
+     "R@1": 0.762,
+     "MRR": 0.825,
+     "n": 21
+    },
+    "knowledge-update": {
+     "R@1": 0.5,
+     "MRR": 0.583,
+     "n": 6
+    },
+    "milestone": {
+     "R@1": 1.0,
+     "MRR": 1.0,
+     "n": 1
+    },
+    "outage-rca": {
+     "R@1": 0.77,
+     "MRR": 0.823,
+     "n": 61
+    },
+    "procedure": {
+     "R@1": 0.622,
+     "MRR": 0.743,
+     "n": 37
+    },
+    "prose-section": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 7
+    },
+    "session-archive": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 3
+    }
+   },
+   "env_flags_recorded": {
+    "MEMORY_V4_SALIENCE": "1",
+    "MEMORY_V4_W_USE": "0.05",
+    "MEMORY_V4_W_WORTH": "0.0",
+    "MEMORY_V4_CALLER": "bench",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+   "db_mtime": "2026-08-15T05:50:39Z",
+   "verdict": "REJECT",
+   "reasons": [
+    "MRR 0.831 <= control 0.836",
+    "class gotcha R@1 0.795 down >=2pts from 0.818",
+    "class procedure R@1 0.622 down >=2pts from 0.649"
+   ]
+  },
+  {
+   "label": "wq576_use002_w002",
+   "artifact": "/home/lumen/minerva/eval/results_wq576_use002_w002_20260815_0551.json",
+   "rc": 0,
+   "env_over": {
+    "MEMORY_V4_SALIENCE": "1",
+    "MEMORY_V4_W_USE": "0.02",
+    "MEMORY_V4_W_WORTH": "0.02"
+   },
+   "control_ok": true,
+   "R@1": 0.77,
+   "R@5": 0.912,
+   "R@10": 0.933,
+   "MRR": 0.832,
+   "n_headline": 239,
+   "trap_at1": 0.188,
+   "abstention": 0.5,
+   "federated_R@1": 0.0,
+   "lat_p50_ms": 189.8,
+   "per_class": {
+    "abstention": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 6
+    },
+    "build": {
+     "R@1": 0.909,
+     "MRR": 0.931,
+     "n": 33
+    },
+    "contradiction-resolution": {
+     "R@1": 0.6,
+     "MRR": 0.6,
+     "n": 5
+    },
+    "decision": {
+     "R@1": 0.839,
+     "MRR": 0.888,
+     "n": 31
+    },
+    "gotcha": {
+     "R@1": 0.795,
+     "MRR": 0.863,
+     "n": 44
+    },
+    "hardware": {
+     "R@1": 0.762,
+     "MRR": 0.825,
+     "n": 21
+    },
+    "knowledge-update": {
+     "R@1": 0.5,
+     "MRR": 0.583,
+     "n": 6
+    },
+    "milestone": {
+     "R@1": 1.0,
+     "MRR": 1.0,
+     "n": 1
+    },
+    "outage-rca": {
+     "R@1": 0.77,
+     "MRR": 0.823,
+     "n": 61
+    },
+    "procedure": {
+     "R@1": 0.622,
+     "MRR": 0.745,
+     "n": 37
+    },
+    "prose-section": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 7
+    },
+    "session-archive": {
+     "R@1": 0.0,
+     "MRR": 0.0,
+     "n": 3
+    }
+   },
+   "env_flags_recorded": {
+    "MEMORY_V4_SALIENCE": "1",
+    "MEMORY_V4_W_USE": "0.02",
+    "MEMORY_V4_W_WORTH": "0.02",
+    "MEMORY_V4_CALLER": "bench",
+    "MEMORY_V4_MEMORYD": "1"
+   },
+   "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+   "db_mtime": "2026-08-15T05:51:29Z",
+   "verdict": "REJECT",
+   "reasons": [
+    "MRR 0.832 <= control 0.836",
+    "class gotcha R@1 0.795 down >=2pts from 0.818",
+    "class procedure R@1 0.622 down >=2pts from 0.649"
+   ]
+  }
+ ],
+ "adopted": [],
+ "flag_default": "MEMORY_V4_SALIENCE=0 (unchanged)"
+}

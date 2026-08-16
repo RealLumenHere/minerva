@@ -16,7 +16,7 @@ Usage:
 The `search()` function is the key: next-session Claude queries it to surface context
 relevant to the current task without loading the full archive.
 """
-import json, sqlite3, hashlib, os, sys, re, requests
+import json, sqlite3, hashlib, os, sys, re, time, requests
 from pathlib import Path
 from datetime import datetime, timezone
 import numpy as np
@@ -40,24 +40,78 @@ def log(m):
         f.write(line + '\n')
 
 
-def embed(text):
-    try:
-        r = requests.post(
-            f'{LOCAL_OLLAMA}/api/embed',
-            json={'model': EMBED_MODEL, 'input': text[:4000]},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return None
-        vec = r.json().get('embeddings', [[]])[0]
-        return np.array(vec, dtype=np.float32) if vec else None
-    except Exception as e:
-        log(f'  embed err: {e}')
+EMBED_ITEMSIZE = 4          # float32
+EMBED_DIM = 768             # nomic-embed-text native dimensionality
+
+
+def embed(text, attempts=2):
+    # timeout=90: nomic cold-load measured 44.3s (OLLAMA_MAX_LOADED_MODELS=1
+    # means every gemma/LFM call evicts it). The old 15s timeout silently
+    # dropped embeddings on every cold path - 4 archival notes lost pre-2026-07-27.
+    # keep_alive pins nomic between embeds; other models still evict it when loaded.
+    #
+    # wq#465 (2026-08-10): a 90s timeout STILL fired once, during the /scratch
+    # model-move (cold load + heavy disk I/O), and poisoned the store. Ollama keeps
+    # loading after the client gives up, so attempt 2 hits a warm model and wins.
+    # Retry is in-process and cheap; do NOT rely on the weekly repair loop instead.
+    last = None
+    for i in range(max(1, attempts)):
+        try:
+            r = requests.post(
+                f'{LOCAL_OLLAMA}/api/embed',
+                json={'model': EMBED_MODEL, 'input': text[:4000], 'keep_alive': '30m'},
+                timeout=90,
+            )
+            if r.status_code != 200:
+                last = f'HTTP {r.status_code}'
+            else:
+                vec = r.json().get('embeddings', [[]])[0]
+                if vec:
+                    return np.array(vec, dtype=np.float32)
+                last = 'empty embeddings[]'
+        except Exception as e:
+            last = str(e)
+        if i + 1 < max(1, attempts):
+            log(f'  embed attempt {i+1} failed ({last}); retrying warm')
+            time.sleep(2)
+    log(f'  embed err: {last}')
+    return None
+
+
+def decode_embedding(blob, expect_dim=None):
+    """Decode a stored embedding BLOB -> 1-D float32 vector, or None if unusable.
+
+    wq#465: THE ONLY sanctioned way to read archival_notes.embedding.
+    Returns None (never raises, never hands back a wrong-shaped array) for:
+      - NULL or zero-length blob  (embed() failed at write time -> repair queue)
+      - length not a multiple of 4 (truncated/partial write)
+      - dimensionality != expect_dim (embedding model changed under the store)
+
+    Pass expect_dim=len(query_vector) so a model swap degrades to "skip old rows"
+    instead of ValueError. np.dot on mismatched 1-D shapes raises, it does not
+    broadcast -- that is exactly the wq#465 crash.
+    """
+    if not blob:
         return None
+    if len(blob) % EMBED_ITEMSIZE:
+        return None
+    v = np.frombuffer(blob, dtype=np.float32)
+    if v.size == 0:
+        return None
+    if expect_dim is not None and v.shape[0] != expect_dim:
+        return None
+    return v
 
 
 def cosine(a, b):
+    # wq#465: shape-safe by contract. Even a caller that bypasses
+    # decode_embedding() gets 0.0 instead of a ValueError that kills the
+    # whole search and silently degrades the fleet to v2 recall.
     if a is None or b is None:
+        return 0.0
+    a = np.asarray(a)
+    b = np.asarray(b)
+    if a.ndim != 1 or b.ndim != 1 or a.size == 0 or a.shape != b.shape:
         return 0.0
     denom = (np.linalg.norm(a) * np.linalg.norm(b)) or 1e-9
     return float(np.dot(a, b) / denom)
@@ -83,7 +137,11 @@ def _ensure_recall_fts():
 
 # ---------- Archival (cold, semantic) ----------
 
-def write_note(kind, title, content, tags=None, source_ref=None):
+def write_note(kind, title, content, tags=None, source_ref=None, origin=None, trust=None):
+    # Memory V3 P5 provenance: env overrides let callers (e.g. convo-learn subprocess)
+    # tag writes without CLI plumbing. Defaults = operator session.
+    origin = origin or os.environ.get('LUMEN_MEM_ORIGIN', 'claude-session')
+    trust = trust or os.environ.get('LUMEN_MEM_TRUST', 'operator')
     """Persist an archival note with embedding for semantic retrieval."""
     ARCHIVAL_DIR.mkdir(parents=True, exist_ok=True)
     nid = hashlib.md5(f'{kind}:{title}:{content[:200]}'.encode()).hexdigest()[:12]
@@ -106,16 +164,49 @@ def write_note(kind, title, content, tags=None, source_ref=None):
 
     # Embedding on title + content
     emb = embed(f'{title}. {content[:2000]}')
-    emb_bytes = emb.tobytes() if emb is not None else b''
+    # wq#465 ROOT CAUSE: this used to store b'' on embed failure. In SQLite an
+    # empty blob is NOT NULL, so every `WHERE embedding IS NOT NULL` filter in the
+    # codebase happily selected it, and np.frombuffer(b'') -> shape (0,) then blew
+    # up np.dot in the v3 dense scan -> fleet-wide silent v2 fallback.
+    # Store NULL: semantically "unknown", correctly excluded by IS NOT NULL, and
+    # picked up by the repair loop (memory_embed_guard / lumen_dream.embed_retry).
+    emb_bytes = emb.tobytes() if emb is not None else None
+    if emb_bytes is None:
+        log(f'  !! embed FAILED for note {nid} -- stored NULL, queued for repair '
+            f'(memory_embed_guard.py repairs; never store an empty blob)')
 
     conn = sqlite3.connect(DB)
+    # wq#610: was INSERT OR REPLACE, which SQLite implements as DELETE+INSERT on
+    # an id collision (nid is content-derived -- md5 of kind:title:content[:200] --
+    # so a repeat commit with the same summary/changed/worked/failed/why text, e.g.
+    # a retried lumen_episode.py commit, genuinely collides). DELETE+INSERT does
+    # NOT fire the wq#575 BEFORE UPDATE OF provenance-immutability trigger (it's an
+    # UPDATE trigger; SQLite's replace path is a DELETE, not an UPDATE), so this was
+    # the one write path in the codebase that could silently reset a row's
+    # origin/trust/created_at/agent_id/lane on nothing more than a duplicate write.
+    # Closing this does NOT need a BEFORE DELETE trigger (which 575's own report
+    # correctly flagged as breaking commit() for every lane, since duplicate
+    # episode commits are routine, not exceptional): switching to a real
+    # INSERT ... ON CONFLICT DO UPDATE whose SET list excludes every column the
+    # immutability trigger watches (origin, trust, agent_id, lane, created_at,
+    # content_sha256, supersedes) eliminates the DELETE entirely, so there is
+    # nothing left for a BEFORE DELETE trigger to guard against on this path --
+    # and it fixes the actual bug (silent provenance reset on collision) rather
+    # than just avoiding the bypass. Verified on a scratch DB copy before this
+    # edit: a same-id conflict updates content/tags/source_ref but leaves
+    # created_at/origin/trust exactly as first written; a negative control that
+    # DOES set origin=excluded.origin correctly ABORTs against the live trigger.
     conn.execute(
-        '''INSERT OR REPLACE INTO archival_notes
-           (id, kind, title, content, embedding, tags, source_ref, created_at)
-           VALUES (?,?,?,?,?,?,?,?)''',
+        '''INSERT INTO archival_notes
+           (id, kind, title, content, embedding, tags, source_ref, created_at, origin, trust)
+           VALUES (?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(id) DO UPDATE SET
+             kind=excluded.kind, title=excluded.title, content=excluded.content,
+             embedding=excluded.embedding, tags=excluded.tags,
+             source_ref=excluded.source_ref''',
         (nid, kind[:40], title[:300], content[:8000], emb_bytes,
          ','.join(tags or [])[:500], (source_ref or '')[:300],
-         datetime.now(timezone.utc).isoformat()))
+         datetime.now(timezone.utc).isoformat(), origin[:40], trust[:20]))
     conn.commit()
     conn.close()
     log(f'  archival note: {nid} [{kind}] "{title[:60]}"')
@@ -181,18 +272,19 @@ def search(query, top_k=5, tiers=None):
         if q_emb is not None:
             conn = sqlite3.connect(DB)
             rows = conn.execute(
-                'SELECT id, kind, title, content, embedding, tags, created_at FROM archival_notes'
+                'SELECT id, kind, title, content, embedding, tags, created_at, trust '
+                'FROM archival_notes WHERE id NOT IN (SELECT absorbed_id FROM note_merges)'
             ).fetchall()
             conn.close()
             scored = []
-            for nid, kind, title, content, emb_b, tags, ts in rows:
-                if not emb_b:
+            for nid, kind, title, content, emb_b, tags, ts, trust in rows:
+                note_emb = decode_embedding(emb_b, expect_dim=q_emb.shape[0])  # wq#465
+                if note_emb is None:
                     continue
-                note_emb = np.frombuffer(emb_b, dtype=np.float32)
                 sim = cosine(q_emb, note_emb)
                 if sim >= 0.3:
                     scored.append({
-                        'tier': 'archival', 'score': sim,
+                        'tier': 'archival', 'score': sim, 'trust': trust,
                         'id': nid, 'kind': kind, 'title': title,
                         'content': content[:800], 'tags': tags, 'ts': ts,
                     })

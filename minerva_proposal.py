@@ -35,10 +35,66 @@ def _load_lumen_state():
         if f.exists() and (_t.time() - f.stat().st_mtime) < 6 * 3600:
             txt = f.read_text().strip()
             if len(txt) > 200 and 'PROBE FAILED' not in txt:
-                return txt
+                # Live probe + invariants. The probe alone is facts without judgement.
+                return txt + chr(10) + chr(10) + INVARIANTS
     except Exception:
         pass
     return LUMEN_STATE_FALLBACK
+
+
+# ---------------------------------------------------------------------------
+# INVARIANTS — appended to the LIVE digest, never replaced by it.
+#
+# ROOT CAUSE THIS FIXES (audited 2026-08-14): wq#127 restored the auto-derived
+# lumen_state.txt on 2026-07-11. _load_lumen_state() then returned the fresh file
+# INSTEAD of the hand-maintained fallback — and the generator only emits probed
+# facts (hardware, models, units, fleet roles). The judgement guidance that lived
+# only in the fallback string vanished from the scorer's context: the GAPS list,
+# the ALREADY-BUILT list, and the content policy. The measurable consequence is
+# all over the defer pile — dozens of defers reading "Lumen lacks an evaluation
+# harness" when eight of them exist and are listed below. Probed facts go stale;
+# these do not, so they are appended to whatever the probe produced.
+# ---------------------------------------------------------------------------
+INVARIANTS = """
+Real current GAPS (the truth — do not invent others):
+- Skills/archival creation has been stalled since 2026-04-22 (tables exist, rarely written to).
+- Intel feed keyword pre-scoring is shallow; feed health is not monitored.
+- Research-to-action conversion is noisy: many proposals are rejected at build
+  for stale/duplicate premises rather than for being bad ideas.
+
+ALREADY BUILT — do NOT propose these again, and do NOT justify a defer by claiming
+they are missing (verified 2026-08-14):
+- Eval/experiment harnesses EXIST: DGM v2 paired_eval + paired-bootstrap gate,
+  skillhex, pelican_bench, model_audit, predicate_audit, judgearena_bench,
+  memory_audit, inflation_check, recall_bench. "Lumen has no eval harness" is FALSE
+  and is not a valid reason to defer — name which harness you would measure with.
+- Automated deployer EXISTS: minerva_factory (PLAN/GATE/CANARY APPLY/RECORD,
+  GREEN auto-apply, YELLOW approval file, RED never-auto, auto-revert). It also
+  stages whole new services inert under /home/lumen/factory/staged/.
+- Agent prompts DO auto-adapt via DGM v2 + skillhex (human-gated promotion).
+- Cross-model agreement (cross_agreement.py, XAGREE_ENABLED) and SpanUQ-lite
+  voting in minerva_verify EXIST. Entity novelty: familiarity_scorer.py.
+- Memory V3 is deployed: bi-temporal state (lumen_state.py), episodic recall
+  (lumen_episode.py), proposal-only consolidation (lumen_dream.py), BGE-M3 hybrid
+  retrieval with RRF fusion.
+- Near-duplicate suppression EXISTS: minerva_dedup.py (local embedding + entity
+  overlap) runs ahead of the verify judge.
+- Deferred proposals are re-reviewed: minerva_defer_review.py turns information-gap
+  defers into research prompts and retires settled ones.
+
+Hardware truth for feasibility calls: Xeon E5-2699 v4 (Broadwell) — NO AVX-512 and
+NO AMX. Anything requiring AVX-512, AMX, or a CUDA GPU is infeasible here; say that
+plainly and reject rather than defer.
+
+DECISION DISCIPLINE: "defer" means a specific, answerable question is genuinely open
+and worth answering. If the item is infeasible on this hardware, off-mission, or
+already covered by the ALREADY BUILT list, REJECT it and say which. Do not use defer
+as a way to avoid committing.
+
+Content policy: NO publishing of any kind. Ghost CMS was permanently deleted 2026-05
+for legal reasons. Research outputs MUST become integration proposals, never
+published content."""
+
 
 LUMEN_STATE_FALLBACK = """LUMEN CURRENT STATE (verified 2026-06-07):
 
@@ -62,9 +118,21 @@ Minerva layer (DEPLOYED, operational): minerva.db (classified_intel, proposals, 
 Real current GAPS (the truth — do not invent others):
 - Skills/archival creation has been stalled since 2026-04-22 (tables exist, rarely written to).
 - Intel feed keyword pre-scoring is shallow; feed health is not monitored.
-- No experiment/eval harness to measure whether adopted changes actually help.
-- Prompt-engine topic banks are static, no auto-adaptation.
-- No automated deployer for deploy_ready proposals; they require a human/Claude session.
+- Research-to-action conversion is noisy: many proposals are rejected at build
+  for stale/duplicate premises rather than for being bad ideas.
+
+ALREADY BUILT — do NOT propose these again (verified 2026-08-10):
+- Eval/experiment harnesses EXIST: DGM v2 paired_eval + paired-bootstrap gate,
+  skillhex, pelican_bench, model_audit, predicate_audit, judgearena_bench,
+  memory_audit, inflation_check.
+- Automated deployer EXISTS: minerva_factory (PLAN/GATE/CANARY APPLY/RECORD,
+  GREEN auto-apply, YELLOW approval file, RED never-auto, auto-revert).
+- Agent prompts DO auto-adapt via DGM v2 + skillhex (human-gated promotion).
+  No /data/lumen/prompt_engine/topics.yaml exists — do not reference it.
+- Cross-model agreement (cross_agreement.py, XAGREE_ENABLED) and SpanUQ-lite
+  voting in minerva_verify EXIST. Entity novelty: familiarity_scorer.py.
+
+Before proposing a NEW capability, check the ALREADY BUILT list first.
 
 Content policy: NO publishing of any kind. Ghost CMS was permanently deleted 2026-05 for legal reasons. Research outputs MUST become integration proposals, never published content."""
 
@@ -199,13 +267,28 @@ def log(m):
 def cerebras_gen(prompt, retries=3):
     if not LITELLM_KEY:
         return ''
+    body = {'model': MODEL, 'messages': [{'role': 'user', 'content': prompt}],
+            # aq#353-class fix (2026-08-07): MODEL=deepseek-v4-flash is a
+            # REASONING model; 1800 was exhausted entirely by hidden
+            # reasoning on complex proposal prompts (Langfuse: output=1800
+            # exactly, content="") -> '' -> "SKIP ... no output" (7-8/10
+            # candidates per run). Same class already fixed in
+            # minerva_classifier (400->1200, 07-27) and minerva_verify
+            # judge (800->3000, today).
+            'temperature': 0.25, 'max_tokens': 4000}
+    if 'deepseek' in str(MODEL):
+        # Measured 2026-08-07 on a failing candidate (6806fd88): without JSON
+        # mode reasoning ran 3694-6157 tokens (exhausts any sane cap); WITH
+        # response_format json_object it dropped to 1852 and produced clean
+        # content. JSON mode structurally curbs reasoning sprawl on this
+        # prompt class. Gated to deepseek — cerebras rungs may reject it.
+        body['response_format'] = {'type': 'json_object'}
     for attempt in range(retries):
         try:
             r = requests.post(
                 LITELLM_URL,
                 headers={'Authorization': f'Bearer {LITELLM_KEY}', 'Content-Type': 'application/json'},
-                json={'model': MODEL, 'messages': [{'role': 'user', 'content': prompt}],
-                      'temperature': 0.25, 'max_tokens': 1800},
+                json=body,
                 timeout=60,
             )
             if r.status_code == 429:
@@ -242,14 +325,40 @@ def mark_processed(intel_id):
     conn.close()
 
 
+
+def _save_duplicate(proposal, intel_id, match, score):
+    """Record a suppressed duplicate with DGM-style lineage (parent_id) so the pile
+    stays auditable: what it duplicated, how close, and why it stopped here."""
+    pid = hashlib.md5(f'{intel_id}:{proposal.get("title","")}'.encode()).hexdigest()[:12]
+    conn = sqlite3.connect(DB)
+    conn.execute(
+        'INSERT OR REPLACE INTO proposals '
+        '(id, parent_id, title, source_intel_id, current_state, proposed_change, '
+        'effort, impact, risk, rollback, status, eval_result, created_at, decision_reason) '
+        'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+        (pid, match.get('proposal_id'), proposal.get('title', '')[:200], intel_id,
+         proposal.get('current_state', '')[:1000], proposal.get('proposed_change', '')[:2000],
+         proposal.get('effort', 'M'), proposal.get('impact', 'M'), proposal.get('risk', 'M'),
+         proposal.get('rollback', '')[:500], 'duplicate',
+         json.dumps({'dedup': {'cosine': round(score, 4),
+                               'entity_share': match.get('entity_share'),
+                               'of': match.get('proposal_id')}}),
+         datetime.now(timezone.utc).isoformat(),
+         (f'Near-duplicate of {match.get("proposal_id")} '
+          f'"{str(match.get("title",""))[:80]}" (cosine {score:.3f}). '
+          f'Suppressed before the verify judge.')[:500]))
+    conn.commit(); conn.close()
+    return pid
+
+
 def save_proposal(proposal, intel_id, verify_result, recall_md=''):
     pid = hashlib.md5(f'{intel_id}:{proposal.get("title","")}'.encode()).hexdigest()[:12]
     conn = sqlite3.connect(DB)
     conn.execute(
         '''INSERT OR REPLACE INTO proposals
            (id, parent_id, title, source_intel_id, current_state, proposed_change,
-            effort, impact, risk, rollback, status, eval_result, created_at)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            effort, impact, risk, rollback, status, eval_result, created_at, decision_reason)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
         (pid, None, proposal.get('title', '')[:200], intel_id,
          proposal.get('current_state', '')[:1000],
          proposal.get('proposed_change', '')[:2000],
@@ -259,7 +368,8 @@ def save_proposal(proposal, intel_id, verify_result, recall_md=''):
          proposal.get('rollback', '')[:500],
          proposal.get('decision', 'pending'),
          json.dumps(verify_result)[:4000],
-         datetime.now(timezone.utc).isoformat()))
+         datetime.now(timezone.utc).isoformat(),
+         proposal.get('decision_reason', '')[:500]))
     conn.commit()
     conn.close()
 
@@ -357,10 +467,53 @@ def run(min_self=0.6, limit=10):
             log(f'  SKIP [{intel_id[:8]}] JSON parse fail: {e}')
             continue
 
-        # Hallucination guard: verify ONLY the current_state claims against LUMEN_STATE
-        # (proposed_change is future speculation, not verifiable against current state)
+        # DEDUP GATE (2026-08-14). 33 of 266 defers in four days were the same
+        # item re-derived from different feeds. Runs before the (expensive) verify
+        # judge so a duplicate costs one local embedding, not a judge call.
+        # Fail-open: any error inside minerva_dedup returns "not a duplicate".
+        try:
+            import minerva_dedup
+            _dtext = f"{obj.get('title','')}\n{obj.get('proposed_change','')[:600]}"
+            _conflict, _route = minerva_dedup.route_conflict(
+                f"{obj.get('title','')} {obj.get('proposed_change','')}")
+            if _conflict:
+                obj['decision'] = 'reject'
+                obj['decision_reason'] = (f'Duplicate: LiteLLM route "{_route}" already exists in '
+                                          f'litellm_config.yaml. ' + (obj.get('decision_reason') or ''))[:500]
+                log(f'  DUP-ROUTE [{intel_id[:8]}] route {_route} already configured -> reject')
+                save_proposal(obj, intel_id, {'passed': False, 'reason': 'duplicate_route'})
+                mark_processed(intel_id); rejected += 1
+                continue
+            _isdup, _match, _score = minerva_dedup.check(_dtext)
+            if _isdup:
+                log(f'  DUP    [{intel_id[:8]}] {str(title)[:44]} ~ {_match["title"][:44]} '
+                    f'(cos {_score:.3f}, entity {_match.get("entity_share")})')
+                _save_duplicate(obj, intel_id, _match, _score)
+                mark_processed(intel_id); rejected += 1
+                continue
+        except Exception as _de:
+            log(f'  dedup skipped (fail-open): {str(_de)[:120]}')
+
+        # Hallucination guard: verify ONLY the current_state claims against
+        # per-claim retrieved ground truth (proposed_change is future
+        # speculation, not verifiable against current state).
+        # 2026-07-27: switched judge context from the static LUMEN_STATE digest
+        # to minerva_factpack.build_context() — hybrid of digest + live-probed
+        # facts under a closed-world rule. Measured on verify_gold_v2 (hand-
+        # audited production sample): judge recall 0.36 -> 0.54 at precision
+        # 1.00 (both known-false claims still rejected). Retrieval-only had
+        # REGRESSED to 0.21 (negation claims lost the digest's GAPS section),
+        # hence hybrid. build_context falls back to the digest on any error,
+        # so this path can never see less context than before. The generator
+        # prompt (line ~333) intentionally still uses LUMEN_STATE.
         answer_to_verify = obj.get('current_state', '')[:1500]
-        v = verify(answer_to_verify, LUMEN_STATE,
+        try:
+            import minerva_factpack
+            _verify_ctx = minerva_factpack.build_context(answer_to_verify)
+        except Exception as _fpe:
+            log(f'  factpack unavailable ({_fpe}) — falling back to static digest')
+            _verify_ctx = LUMEN_STATE
+        v = verify(answer_to_verify, _verify_ctx,
                    subject=f'proposal:{str(title)[:40]}', model=MODEL, mode='semantic')
         if not v['passed']:
             log(f'  REJECT [{intel_id[:8]}] {str(title)[:50]} - hallucination guard failed ({v.get("reason")})')
@@ -379,6 +532,12 @@ def run(min_self=0.6, limit=10):
         if recall_md:
             log(f'  RECALL [{intel_id[:8]}] prior-experience advisory attached')
         pid = save_proposal(obj, intel_id, v, recall_md=recall_md)
+        try:
+            import minerva_dedup
+            minerva_dedup.record(f"{obj.get('title','')}\n{obj.get('proposed_change','')[:600]}",
+                                 intel_id, pid, obj.get('title', ''))
+        except Exception:
+            pass
         mark_processed(intel_id)
         generated += 1
         log(f'  GEN    [{intel_id[:8]}] -> proposal {pid} decision={obj.get("decision")} {str(title)[:50]}')
@@ -388,4 +547,9 @@ def run(min_self=0.6, limit=10):
 
 
 if __name__ == '__main__':
-    run()
+    # wq#412 (2026-08-08): env overrides so the timer can raise throughput
+    # without code edits. PROPOSAL_LIMIT=25 set in the service drop-in to
+    # drain the 813-item eligible backlog (~7 days at inflow ~30/day);
+    # revert = remove the env line. Defaults unchanged.
+    run(min_self=float(os.getenv('PROPOSAL_MIN_SELF', '0.6')),
+        limit=int(os.getenv('PROPOSAL_LIMIT', '10')))
