@@ -125,8 +125,8 @@ citing that 0.00 style-bias as evidence of judge quality should cite this instea
 
     ssh lumen@100.117.66.102 '/home/lumen/personas/qa/run_clear_gate.sh'            # full gate, ~4 min
     ssh lumen@100.117.66.102 'cat /home/lumen/personas/qa/gate_results_clear_2026-08-23_053602.md'
-    ssh lumen@100.117.66.102 '/tmp/claude-web-wq191-diag.sh'                        # rubric diagnostic
+    ssh lumen@100.117.66.102 '/home/lumen/personas/qa/run_diag_tieprime.sh'   # rubric diagnostic
 
 Artifacts: `personas/qa/{judge_gate_gptoss.py, calib_clear_pairs.jsonl,
 gate_results_clear_2026-08-23_053602.md, diag_rubric_tieprime.py, diag_tieprime_result.json,
-run_clear_gate.sh}`. `personas/` is not a git repo; this report is the tracked record.
+run_clear_gate.sh, run_diag_tieprime.sh}`. `personas/` is not a git repo; this report is the tracked record.
