@@ -24,8 +24,8 @@ load_dotenv('/home/lumen/agent/.env')
 DB = Path('/home/lumen/minerva/minerva.db')
 SKILLS_DIR = Path('/home/lumen/minerva/skills')
 LOG = Path('/home/lumen/minerva/logs/skills.log')
-LOCAL_OLLAMA = 'http://127.0.0.1:11434'  # local Ollama (PBox retired 2026-06-07)
-EMBED_MODEL = 'nomic-embed-text'
+EMBED_URL = os.environ.get('MINERVA_EMBED_URL', 'http://127.0.0.1:11434')  # wq#567: unified env pin
+EMBED_MODEL = os.environ.get('MINERVA_EMBED_MODEL', 'nomic-embed-text')
 
 
 def log(m):
@@ -42,7 +42,7 @@ def embed(text):
     44.3s (MAX_LOADED_MODELS=1 evicts it constantly); 15s silently failed."""
     try:
         r = requests.post(
-            f'{LOCAL_OLLAMA}/api/embed',
+            f'{EMBED_URL}/api/embed',
             json={'model': EMBED_MODEL, 'input': text[:4000], 'keep_alive': '30m'},
             timeout=90,
         )

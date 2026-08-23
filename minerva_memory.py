@@ -27,8 +27,8 @@ DB = Path('/home/lumen/minerva/minerva.db')
 ARCHIVAL_DIR = Path('/home/lumen/minerva/archival')
 MEMORY_FILE = Path('/home/lumen/claude_memory.md')
 LOG = Path('/home/lumen/minerva/logs/memory.log')
-LOCAL_OLLAMA = 'http://127.0.0.1:11434'  # local Ollama (PBox retired 2026-06-07)
-EMBED_MODEL = 'nomic-embed-text'
+EMBED_URL = os.environ.get('MINERVA_EMBED_URL', 'http://127.0.0.1:11434')  # wq#567: env-overridable; pin on replacement hw when it lands
+EMBED_MODEL = os.environ.get('MINERVA_EMBED_MODEL', 'nomic-embed-text')
 
 
 def log(m):
@@ -58,7 +58,7 @@ def embed(text, attempts=2):
     for i in range(max(1, attempts)):
         try:
             r = requests.post(
-                f'{LOCAL_OLLAMA}/api/embed',
+                f'{EMBED_URL}/api/embed',
                 json={'model': EMBED_MODEL, 'input': text[:4000], 'keep_alive': '30m'},
                 timeout=90,
             )

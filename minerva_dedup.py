@@ -25,8 +25,8 @@ import urllib.request
 from pathlib import Path
 
 DB = '/home/lumen/minerva/minerva.db'
-OLLAMA = os.getenv('OLLAMA_URL', 'http://localhost:11434')
-EMBED_MODEL = os.getenv('DEDUP_EMBED_MODEL', 'nomic-embed-text')
+OLLAMA = os.getenv('MINERVA_EMBED_URL', os.getenv('OLLAMA_URL', 'http://localhost:11434'))  # wq#567: prefer unified pin
+EMBED_MODEL = os.getenv('MINERVA_EMBED_MODEL', os.getenv('DEDUP_EMBED_MODEL', 'nomic-embed-text'))
 # CALIBRATED 2026-08-14 on 400 real proposals (reports/dedup_calibration_20260814.md):
 #   random pairs      p50 .580  p90 .670  p99 .743  max .798
 #   true duplicates   .82 - .91   (same model arriving from 4 different feeds)
