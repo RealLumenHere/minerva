@@ -642,6 +642,123 @@ def plan_one(prop):
     c.commit(); c.close()
     return pid, lane
 
+# --- wq#675: post-deploy verification gate ---
+# 'deployed' is no longer a flag-flip. Every status transition to 'deployed'
+# must pass a liveness/health check. The verify step runs AFTER the applier
+# succeeds and BEFORE the proposal status is set.
+
+def _run_health_cmd(cmd, timeout=30):
+    """Run a health_cmd string; returns (exit_code, stdout[:500])."""
+    if not cmd or not cmd.strip():
+        return None, 'no_health_cmd'
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, (r.stdout + r.stderr).strip()[:500]
+    except subprocess.TimeoutExpired:
+        return 1, f'health_cmd timed out after {timeout}s'
+    except Exception as e:
+        return 1, f'health_cmd error: {str(e)[:200]}'
+
+# Type-specific default verification when no health_cmd is provided.
+_VERIFY_DEFAULTS = {
+    'litellm_route_add': lambda p: _verify_litellm_route(p),
+    'new_standalone_script': lambda p: _verify_script_exists(p),
+    'new_service': lambda p: _verify_service_staged(p),
+}
+
+def _verify_litellm_route(plan_row):
+    """Check the route name actually appears in the gateway's model list."""
+    params = json.loads(plan_row['params'] or '{}')
+    name = params.get('model_name', '')
+    if not name:
+        return False, 'no model_name in params'
+    key = litellm_key()
+    rc, out = sh(f'curl -fsS -m 10 -H "Authorization: Bearer {key}" http://localhost:4000/v1/models', timeout=15)
+    if rc != 0:
+        return False, f'gateway unreachable (rc={rc})'
+    if name in out:
+        return True, f'route {name} visible in /v1/models'
+    return False, f'route {name} NOT in /v1/models response'
+
+def _verify_script_exists(plan_row):
+    """Check the script file exists and is syntactically valid."""
+    params = json.loads(plan_row['params'] or '{}')
+    fname = params.get('filename', '')
+    dest = SCRIPTS_DIR / fname
+    if not dest.exists():
+        return False, f'{dest} does not exist'
+    if str(dest).endswith('.py'):
+        rc, out = sh(f'python3 -m py_compile {shlex.quote(str(dest))}')
+        if rc != 0:
+            return False, f'py_compile failed: {out[:200]}'
+    return True, f'{dest} exists and valid'
+
+def _verify_service_staged(plan_row):
+    """new_service applier is STAGE-ONLY. Staged != deployed. Always returns
+    False because nothing is live — the proposal should be 'applied_unverified'
+    until install_staged_service() is used and the unit comes up."""
+    params = json.loads(plan_row['params'] or '{}')
+    name = params.get('name', '')
+    # Check if the service was actually installed (via install_staged_service)
+    rc, out = sh(f'systemctl is-active {shlex.quote(name + ".service")} 2>/dev/null || systemctl is-active {shlex.quote(name + ".timer")} 2>/dev/null', timeout=10)
+    if rc == 0 and out.strip() in ('active', 'waiting'):
+        return True, f'{name} is running ({out.strip()})'
+    return False, f'{name} not active (staged only, not installed)'
+
+def verify_deployment(plan_row, rec=None):
+    """Post-apply verification gate (wq#675).
+
+    Order:
+      1. If plan has a non-empty health_cmd, run it. Exit 0 = verified.
+      2. Else fall back to type-specific default check.
+      3. No check available = fail-closed (unverified).
+    """
+    if rec is None:
+        def rec(step, detail): log(f'  verify: {step}: {detail}')
+
+    health_cmd = (plan_row['health_cmd'] if 'health_cmd' in plan_row.keys() else '').strip() if plan_row else ''
+    change_type = plan_row['change_type'] if plan_row and 'change_type' in plan_row.keys() else ''
+
+    # 1. Explicit health_cmd takes priority
+    if health_cmd:
+        rc, out = _run_health_cmd(health_cmd)
+        if rc == 0:
+            return True, f'health_cmd passed: {out[:150]}'
+        return False, f'health_cmd failed (rc={rc}): {out[:200]}'
+
+    # 2. Type-specific default
+    checker = _VERIFY_DEFAULTS.get(change_type)
+    if checker:
+        return checker(plan_row)
+
+    # 3. Fail-closed: unknown change_type with no health_cmd = unverified
+    return False, f'no verification available for change_type={change_type}'
+
+def verify_proposal(proposal_id):
+    """CLI entry: re-verify a deployed (or applied_unverified) proposal.
+    Finds the plan, runs verification, updates status accordingly.
+    Returns (verified, detail)."""
+    c = db()
+    plan = c.execute('SELECT * FROM plans WHERE proposal_id=? ORDER BY created_at DESC LIMIT 1', (proposal_id,)).fetchone()
+    prop = c.execute('SELECT * FROM proposals WHERE id=?', (proposal_id,)).fetchone()
+    c.close()
+    if not prop:
+        return False, f'proposal {proposal_id} not found'
+    if not plan:
+        return False, f'no plan for proposal {proposal_id} — cannot verify (was a raw status flip)'
+    ok, detail = verify_deployment(plan)
+    c = db()
+    if ok:
+        c.execute('UPDATE proposals SET status=?, deployed_at=? WHERE id=? AND status IN (?, ?)',
+                  ('deployed', now(), proposal_id, 'applied_unverified', 'deployed'))
+    else:
+        c.execute('UPDATE proposals SET status=?, deployed_at=NULL WHERE id=? AND status=?',
+                  ('applied_unverified', proposal_id, 'deployed'))
+    c.commit(); c.close()
+    log(f'verify {proposal_id}: {"PASS" if ok else "FAIL"} — {detail}')
+    return ok, detail
+
+
 def apply_plan(plan_id, approved=False):
     c = db()
     row = c.execute('SELECT * FROM plans WHERE id=?', (plan_id,)).fetchone()
@@ -672,11 +789,27 @@ def apply_plan(plan_id, approved=False):
     c.execute('UPDATE plans SET status=?, applied_at=?, reverted=?, notes=notes || ? WHERE id=?',
               ('applied' if ok else 'failed_reverted', now(), 0 if ok else 1,
                chr(10) + chr(10).join(trail)[:2000], plan_id))
+    # --- wq#675: post-deploy verification gate ---
+    # Applier success means "action completed" (file written, config edited).
+    # 'deployed' requires a SEPARATE liveness/health check to pass.
+    if ok:
+        verified, verify_detail = verify_deployment(row, rec)
+        if verified:
+            prop_status, prop_ts = 'deployed', now()
+            rec('VERIFIED', verify_detail)
+        else:
+            prop_status, prop_ts = 'applied_unverified', None
+            rec('VERIFY_FAILED', verify_detail)
+    else:
+        prop_status, prop_ts = 'deploy_ready', None
     c.execute('UPDATE proposals SET status=?, deployed_at=? WHERE id=?',
-              ('deployed' if ok else 'deploy_ready', now() if ok else None, row['proposal_id']))
+              (prop_status, prop_ts, row['proposal_id']))
     c.commit(); c.close()
     record_changelog(row, ok, detail)
-    episode_commit(f"factory {'APPLIED' if ok else 'FAILED+REVERTED'} plan {plan_id} ({row['change_type']}) for proposal {row['proposal_id']}: {detail[:150]}")
+    final_label = f"{'APPLIED' if ok else 'FAILED+REVERTED'}"
+    if ok:
+        final_label += f" [{'VERIFIED' if verified else 'UNVERIFIED'}]"
+    episode_commit(f"factory {final_label} plan {plan_id} ({row['change_type']}) for proposal {row['proposal_id']}: {detail[:150]}")
     return ok, detail
 
 
@@ -885,6 +1018,40 @@ def main():
         ok, detail = apply_plan(a[1], approved='--approved' in a)
         print(('OK: ' if ok else 'NO: ') + detail)
         sys.exit(0 if ok else 1)
+    elif a[0] == 'verify':
+        # verify <proposal_id>  — re-run liveness check, update status
+        if len(a) < 2:
+            print('usage: minerva-factory verify <proposal_id>'); sys.exit(1)
+        ok, detail = verify_proposal(a[1])
+        print(('PASS: ' if ok else 'FAIL: ') + detail)
+        sys.exit(0 if ok else 1)
+    elif a[0] == 'verify-all':
+        # re-verify every currently-deployed proposal
+        c = db()
+        rows = c.execute("SELECT id FROM proposals WHERE status='deployed' ORDER BY deployed_at").fetchall()
+        c.close()
+        passed = failed = skipped = 0
+        for r in rows:
+            ok, detail = verify_proposal(r['id'])
+            label = 'PASS' if ok else 'FAIL'
+            if 'raw status flip' in detail:
+                label = 'SKIP (no plan)'
+                skipped += 1
+            elif ok:
+                passed += 1
+            else:
+                failed += 1
+            print(f'  {label}: {r["id"]} — {detail[:100]}')
+        print(f'\nSummary: {passed} verified, {failed} demoted to applied_unverified, {skipped} planless (reclassified)')
+        # Reclassify planless deployed proposals (raw DB flips with no plan = no way to verify)
+        c = db()
+        c.execute("""UPDATE proposals SET status='applied_unverified', deployed_at=NULL
+                     WHERE status='deployed'
+                       AND id NOT IN (SELECT proposal_id FROM plans WHERE proposal_id IS NOT NULL)""")
+        reclassified = c.execute('SELECT changes()').fetchone()[0]
+        c.commit(); c.close()
+        if reclassified:
+            print(f'  {reclassified} planless proposals reclassified to applied_unverified')
     elif a[0] == 'replan':
         n = int(a[1]) if len(a) > 1 and a[1].isdigit() else 5
         cmd_replan(n, do_apply='--apply' in a)
