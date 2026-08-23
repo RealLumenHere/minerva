@@ -120,6 +120,11 @@ FED_CONTENT = int(os.environ.get('MEMORY_V4_FED_CONTENT', '2400'))
 # and C, report 573_federated.md §3); this switch is which TEXT the existing lex
 # channel reads, not a change to any fusion weight.
 FED_LEXCTX = os.environ.get('MEMORY_V4_FED_LEXCTX', '0') == '1'
+# wq#603/654: tier-penalty sweep. Subtracts a fixed amount from each federated
+# fusion score to compensate for the structural g+ent asymmetry (archival notes
+# get up to .05*g + .02*ent that prose structurally cannot). Default 0.0 = no
+# change to production behaviour. EVAL-ONLY until adopted by wq#655.
+FED_PENALTY = float(os.environ.get('MEMORY_V4_FED_PENALTY', '0.0'))
 LAST_FED = {'attempted': False, 'applied': False, 'scanned': 0, 'merged': 0,
             'ms': 0.0, 'err': None}
 _FED_DATE_RE = re.compile(r'(\d{4})-(\d{2})-(\d{2})')
@@ -169,7 +174,7 @@ def _federated(conn, query, q_toks, q_emb, now_ts):
             except Exception:
                 ts = now_ts
             rec = max(0.0, 1.0 - ((now_ts - ts) / 86400.0) / 365.0)
-            fused = (W_D * d + W_LEX * lex + W_REC * rec) * FED_SCALE
+            fused = (W_D * d + W_LEX * lex + W_REC * rec) * FED_SCALE - FED_PENALTY
             hp = f" › {r['heading_path']}" if r['heading_path'] else ''
             out.append({'tier': 'federated', 'score': round(fused, 4),
                         'id': r['id'], 'kind': r['source_kind'],

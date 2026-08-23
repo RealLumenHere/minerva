@@ -1,0 +1,1416 @@
+[
+  {
+    "penalty": 0.0,
+    "path": "/home/lumen/minerva/eval/results_wq603_p000_20260823_1316.json",
+    "summary": {
+      "label": "wq603_p000",
+      "ts": "2026-08-23T13:16:20Z",
+      "scoring_semantics": "wq595",
+      "set_size_total": 257,
+      "set_size_scored": 255,
+      "n_controls": 2,
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "top_k": 10,
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.749,
+        "R@5": 0.9,
+        "R@10": 0.933,
+        "MRR": 0.814
+      },
+      "R@1": 0.749,
+      "R@5": 0.9,
+      "R@10": 0.933,
+      "MRR": 0.814,
+      "n_headline": 239,
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.7,
+        "R@5": 0.9,
+        "R@10": 0.9,
+        "MRR": 0.75
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.741,
+        "R@5": 0.902,
+        "R@10": 0.943,
+        "MRR": 0.811
+      },
+      "legacy_wq572_headline_ALL_SCORED": {
+        "n": 255,
+        "R@1": 0.741,
+        "R@5": 0.898,
+        "R@10": 0.933,
+        "MRR": 0.807
+      },
+      "lat_p50_ms": 3825.8,
+      "lat_p95_ms_INFO_ONLY": 4923.8,
+      "misses_qids": [
+        57,
+        58,
+        59,
+        60,
+        66,
+        68,
+        73,
+        81,
+        86,
+        91,
+        100,
+        214,
+        230,
+        231,
+        235,
+        238
+      ],
+      "federated_miss_qids": [
+        253
+      ],
+      "first_hit_tier_counts": {
+        "archival": 221,
+        "federated": 11
+      },
+      "per_class": {
+        "abstention": {
+          "n": 6,
+          "R@1": 0.0,
+          "R@5": 0.0,
+          "R@10": 0.0,
+          "MRR": 0.0,
+          "scope": "abstention-passrate (rank null BY DESIGN \u2014 see summary.abstention)"
+        },
+        "build": {
+          "n": 33,
+          "R@1": 0.848,
+          "R@5": 0.939,
+          "R@10": 1.0,
+          "MRR": 0.9,
+          "scope": "headline"
+        },
+        "contradiction-resolution": {
+          "n": 5,
+          "R@1": 0.6,
+          "R@5": 0.6,
+          "R@10": 0.6,
+          "MRR": 0.6,
+          "scope": "headline"
+        },
+        "decision": {
+          "n": 31,
+          "R@1": 0.806,
+          "R@5": 0.968,
+          "R@10": 0.968,
+          "MRR": 0.866,
+          "scope": "headline"
+        },
+        "gotcha": {
+          "n": 44,
+          "R@1": 0.841,
+          "R@5": 0.932,
+          "R@10": 0.932,
+          "MRR": 0.881,
+          "scope": "headline"
+        },
+        "hardware": {
+          "n": 21,
+          "R@1": 0.714,
+          "R@5": 0.905,
+          "R@10": 0.952,
+          "MRR": 0.791,
+          "scope": "headline"
+        },
+        "knowledge-update": {
+          "n": 6,
+          "R@1": 0.5,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.583,
+          "scope": "headline"
+        },
+        "milestone": {
+          "n": 1,
+          "R@1": 1.0,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 1.0,
+          "scope": "headline"
+        },
+        "outage-rca": {
+          "n": 61,
+          "R@1": 0.721,
+          "R@5": 0.885,
+          "R@10": 0.918,
+          "MRR": 0.794,
+          "scope": "headline"
+        },
+        "procedure": {
+          "n": 37,
+          "R@1": 0.622,
+          "R@5": 0.865,
+          "R@10": 0.946,
+          "MRR": 0.723,
+          "scope": "headline"
+        },
+        "prose-section": {
+          "n": 7,
+          "R@1": 0.857,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 0.893,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        },
+        "session-archive": {
+          "n": 3,
+          "R@1": 0.333,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.417,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        }
+      },
+      "runtime_config": {
+        "engine_arg": "v3",
+        "env_flags": {
+          "MEMORY_V4_FEDERATED": "1",
+          "MEMORY_V4_FED_PENALTY": "0.0",
+          "MEMORY_V4_MEMORYD": "1"
+        },
+        "effective_engine": "v3",
+        "minerva_db_mtime": "2026-08-23T13:16:20Z",
+        "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+        "golden_is_frozen_snapshot": true,
+        "golden_mtime": "2026-08-14T19:45:42Z",
+        "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_md5": "693c881dcd41112e0e715bff52a9e150",
+        "golden_live_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_differs_from_live": false,
+        "orig_193_sha256": "8c3f5ab058761703676b157524307750b3ed069032353e9d8f7e5dda1b28e9b6",
+        "recall2_mtime": "2026-08-23T13:00:09Z",
+        "embed_model": "nomic (archival_notes.embedding, index-time)",
+        "host": "lumen",
+        "scoring_semantics": "wq595"
+      }
+    }
+  },
+  {
+    "penalty": 0.01,
+    "path": "/home/lumen/minerva/eval/results_wq603_p001_20260823_1317.json",
+    "summary": {
+      "label": "wq603_p001",
+      "ts": "2026-08-23T13:17:21Z",
+      "scoring_semantics": "wq595",
+      "set_size_total": 257,
+      "set_size_scored": 255,
+      "n_controls": 2,
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "top_k": 10,
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.762,
+        "R@5": 0.9,
+        "R@10": 0.933,
+        "MRR": 0.824
+      },
+      "R@1": 0.762,
+      "R@5": 0.9,
+      "R@10": 0.933,
+      "MRR": 0.824,
+      "n_headline": 239,
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.7,
+        "R@5": 0.9,
+        "R@10": 0.9,
+        "MRR": 0.75
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.756,
+        "R@5": 0.902,
+        "R@10": 0.943,
+        "MRR": 0.823
+      },
+      "legacy_wq572_headline_ALL_SCORED": {
+        "n": 255,
+        "R@1": 0.753,
+        "R@5": 0.898,
+        "R@10": 0.933,
+        "MRR": 0.816
+      },
+      "lat_p50_ms": 232.6,
+      "lat_p95_ms_INFO_ONLY": 306.5,
+      "misses_qids": [
+        57,
+        58,
+        59,
+        60,
+        66,
+        68,
+        73,
+        81,
+        86,
+        91,
+        100,
+        214,
+        230,
+        231,
+        235,
+        238
+      ],
+      "federated_miss_qids": [
+        253
+      ],
+      "first_hit_tier_counts": {
+        "archival": 222,
+        "federated": 10
+      },
+      "per_class": {
+        "abstention": {
+          "n": 6,
+          "R@1": 0.0,
+          "R@5": 0.0,
+          "R@10": 0.0,
+          "MRR": 0.0,
+          "scope": "abstention-passrate (rank null BY DESIGN \u2014 see summary.abstention)"
+        },
+        "build": {
+          "n": 33,
+          "R@1": 0.879,
+          "R@5": 0.939,
+          "R@10": 1.0,
+          "MRR": 0.915,
+          "scope": "headline"
+        },
+        "contradiction-resolution": {
+          "n": 5,
+          "R@1": 0.6,
+          "R@5": 0.6,
+          "R@10": 0.6,
+          "MRR": 0.6,
+          "scope": "headline"
+        },
+        "decision": {
+          "n": 31,
+          "R@1": 0.839,
+          "R@5": 0.968,
+          "R@10": 0.968,
+          "MRR": 0.882,
+          "scope": "headline"
+        },
+        "gotcha": {
+          "n": 44,
+          "R@1": 0.818,
+          "R@5": 0.932,
+          "R@10": 0.932,
+          "MRR": 0.869,
+          "scope": "headline"
+        },
+        "hardware": {
+          "n": 21,
+          "R@1": 0.714,
+          "R@5": 0.905,
+          "R@10": 0.952,
+          "MRR": 0.8,
+          "scope": "headline"
+        },
+        "knowledge-update": {
+          "n": 6,
+          "R@1": 0.5,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.583,
+          "scope": "headline"
+        },
+        "milestone": {
+          "n": 1,
+          "R@1": 1.0,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 1.0,
+          "scope": "headline"
+        },
+        "outage-rca": {
+          "n": 61,
+          "R@1": 0.754,
+          "R@5": 0.885,
+          "R@10": 0.918,
+          "MRR": 0.816,
+          "scope": "headline"
+        },
+        "procedure": {
+          "n": 37,
+          "R@1": 0.622,
+          "R@5": 0.865,
+          "R@10": 0.946,
+          "MRR": 0.734,
+          "scope": "headline"
+        },
+        "prose-section": {
+          "n": 7,
+          "R@1": 0.857,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 0.893,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        },
+        "session-archive": {
+          "n": 3,
+          "R@1": 0.333,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.417,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        }
+      },
+      "runtime_config": {
+        "engine_arg": "v3",
+        "env_flags": {
+          "MEMORY_V4_FEDERATED": "1",
+          "MEMORY_V4_FED_PENALTY": "0.01",
+          "MEMORY_V4_MEMORYD": "1"
+        },
+        "effective_engine": "v3",
+        "minerva_db_mtime": "2026-08-23T13:17:21Z",
+        "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+        "golden_is_frozen_snapshot": true,
+        "golden_mtime": "2026-08-14T19:45:42Z",
+        "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_md5": "693c881dcd41112e0e715bff52a9e150",
+        "golden_live_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_differs_from_live": false,
+        "orig_193_sha256": "8c3f5ab058761703676b157524307750b3ed069032353e9d8f7e5dda1b28e9b6",
+        "recall2_mtime": "2026-08-23T13:00:09Z",
+        "embed_model": "nomic (archival_notes.embedding, index-time)",
+        "host": "lumen",
+        "scoring_semantics": "wq595"
+      }
+    }
+  },
+  {
+    "penalty": 0.02,
+    "path": "/home/lumen/minerva/eval/results_wq603_p002_20260823_1318.json",
+    "summary": {
+      "label": "wq603_p002",
+      "ts": "2026-08-23T13:18:22Z",
+      "scoring_semantics": "wq595",
+      "set_size_total": 257,
+      "set_size_scored": 255,
+      "n_controls": 2,
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "top_k": 10,
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.762,
+        "R@5": 0.904,
+        "R@10": 0.933,
+        "MRR": 0.825
+      },
+      "R@1": 0.762,
+      "R@5": 0.904,
+      "R@10": 0.933,
+      "MRR": 0.825,
+      "n_headline": 239,
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.7,
+        "R@5": 0.9,
+        "R@10": 0.9,
+        "MRR": 0.745
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.756,
+        "R@5": 0.907,
+        "R@10": 0.943,
+        "MRR": 0.823
+      },
+      "legacy_wq572_headline_ALL_SCORED": {
+        "n": 255,
+        "R@1": 0.753,
+        "R@5": 0.902,
+        "R@10": 0.933,
+        "MRR": 0.816
+      },
+      "lat_p50_ms": 233.5,
+      "lat_p95_ms_INFO_ONLY": 302.3,
+      "misses_qids": [
+        57,
+        58,
+        59,
+        60,
+        66,
+        68,
+        73,
+        81,
+        86,
+        91,
+        100,
+        214,
+        230,
+        231,
+        235,
+        238
+      ],
+      "federated_miss_qids": [
+        253
+      ],
+      "first_hit_tier_counts": {
+        "archival": 223,
+        "federated": 9
+      },
+      "per_class": {
+        "abstention": {
+          "n": 6,
+          "R@1": 0.0,
+          "R@5": 0.0,
+          "R@10": 0.0,
+          "MRR": 0.0,
+          "scope": "abstention-passrate (rank null BY DESIGN \u2014 see summary.abstention)"
+        },
+        "build": {
+          "n": 33,
+          "R@1": 0.879,
+          "R@5": 0.939,
+          "R@10": 1.0,
+          "MRR": 0.915,
+          "scope": "headline"
+        },
+        "contradiction-resolution": {
+          "n": 5,
+          "R@1": 0.6,
+          "R@5": 0.6,
+          "R@10": 0.6,
+          "MRR": 0.6,
+          "scope": "headline"
+        },
+        "decision": {
+          "n": 31,
+          "R@1": 0.839,
+          "R@5": 0.968,
+          "R@10": 0.968,
+          "MRR": 0.882,
+          "scope": "headline"
+        },
+        "gotcha": {
+          "n": 44,
+          "R@1": 0.818,
+          "R@5": 0.932,
+          "R@10": 0.932,
+          "MRR": 0.869,
+          "scope": "headline"
+        },
+        "hardware": {
+          "n": 21,
+          "R@1": 0.714,
+          "R@5": 0.905,
+          "R@10": 0.952,
+          "MRR": 0.8,
+          "scope": "headline"
+        },
+        "knowledge-update": {
+          "n": 6,
+          "R@1": 0.5,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.583,
+          "scope": "headline"
+        },
+        "milestone": {
+          "n": 1,
+          "R@1": 1.0,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 1.0,
+          "scope": "headline"
+        },
+        "outage-rca": {
+          "n": 61,
+          "R@1": 0.754,
+          "R@5": 0.885,
+          "R@10": 0.918,
+          "MRR": 0.816,
+          "scope": "headline"
+        },
+        "procedure": {
+          "n": 37,
+          "R@1": 0.622,
+          "R@5": 0.892,
+          "R@10": 0.946,
+          "MRR": 0.736,
+          "scope": "headline"
+        },
+        "prose-section": {
+          "n": 7,
+          "R@1": 0.857,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 0.893,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        },
+        "session-archive": {
+          "n": 3,
+          "R@1": 0.333,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.4,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        }
+      },
+      "runtime_config": {
+        "engine_arg": "v3",
+        "env_flags": {
+          "MEMORY_V4_FEDERATED": "1",
+          "MEMORY_V4_FED_PENALTY": "0.02",
+          "MEMORY_V4_MEMORYD": "1"
+        },
+        "effective_engine": "v3",
+        "minerva_db_mtime": "2026-08-23T13:18:22Z",
+        "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+        "golden_is_frozen_snapshot": true,
+        "golden_mtime": "2026-08-14T19:45:42Z",
+        "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_md5": "693c881dcd41112e0e715bff52a9e150",
+        "golden_live_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_differs_from_live": false,
+        "orig_193_sha256": "8c3f5ab058761703676b157524307750b3ed069032353e9d8f7e5dda1b28e9b6",
+        "recall2_mtime": "2026-08-23T13:00:09Z",
+        "embed_model": "nomic (archival_notes.embedding, index-time)",
+        "host": "lumen",
+        "scoring_semantics": "wq595"
+      }
+    }
+  },
+  {
+    "penalty": 0.03,
+    "path": "/home/lumen/minerva/eval/results_wq603_p003_20260823_1319.json",
+    "summary": {
+      "label": "wq603_p003",
+      "ts": "2026-08-23T13:19:24Z",
+      "scoring_semantics": "wq595",
+      "set_size_total": 257,
+      "set_size_scored": 255,
+      "n_controls": 2,
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "top_k": 10,
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.766,
+        "R@5": 0.904,
+        "R@10": 0.933,
+        "MRR": 0.827
+      },
+      "R@1": 0.766,
+      "R@5": 0.904,
+      "R@10": 0.933,
+      "MRR": 0.827,
+      "n_headline": 239,
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.6,
+        "R@5": 0.9,
+        "R@10": 0.9,
+        "MRR": 0.695
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.762,
+        "R@5": 0.907,
+        "R@10": 0.943,
+        "MRR": 0.826
+      },
+      "legacy_wq572_headline_ALL_SCORED": {
+        "n": 255,
+        "R@1": 0.753,
+        "R@5": 0.902,
+        "R@10": 0.933,
+        "MRR": 0.816
+      },
+      "lat_p50_ms": 231.7,
+      "lat_p95_ms_INFO_ONLY": 305.5,
+      "misses_qids": [
+        57,
+        58,
+        59,
+        60,
+        66,
+        68,
+        73,
+        81,
+        86,
+        91,
+        100,
+        214,
+        230,
+        231,
+        235,
+        238
+      ],
+      "federated_miss_qids": [
+        253
+      ],
+      "first_hit_tier_counts": {
+        "archival": 223,
+        "federated": 9
+      },
+      "per_class": {
+        "abstention": {
+          "n": 6,
+          "R@1": 0.0,
+          "R@5": 0.0,
+          "R@10": 0.0,
+          "MRR": 0.0,
+          "scope": "abstention-passrate (rank null BY DESIGN \u2014 see summary.abstention)"
+        },
+        "build": {
+          "n": 33,
+          "R@1": 0.879,
+          "R@5": 0.939,
+          "R@10": 1.0,
+          "MRR": 0.915,
+          "scope": "headline"
+        },
+        "contradiction-resolution": {
+          "n": 5,
+          "R@1": 0.6,
+          "R@5": 0.6,
+          "R@10": 0.6,
+          "MRR": 0.6,
+          "scope": "headline"
+        },
+        "decision": {
+          "n": 31,
+          "R@1": 0.839,
+          "R@5": 0.968,
+          "R@10": 0.968,
+          "MRR": 0.882,
+          "scope": "headline"
+        },
+        "gotcha": {
+          "n": 44,
+          "R@1": 0.818,
+          "R@5": 0.932,
+          "R@10": 0.932,
+          "MRR": 0.869,
+          "scope": "headline"
+        },
+        "hardware": {
+          "n": 21,
+          "R@1": 0.762,
+          "R@5": 0.905,
+          "R@10": 0.952,
+          "MRR": 0.823,
+          "scope": "headline"
+        },
+        "knowledge-update": {
+          "n": 6,
+          "R@1": 0.5,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.583,
+          "scope": "headline"
+        },
+        "milestone": {
+          "n": 1,
+          "R@1": 1.0,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 1.0,
+          "scope": "headline"
+        },
+        "outage-rca": {
+          "n": 61,
+          "R@1": 0.754,
+          "R@5": 0.885,
+          "R@10": 0.918,
+          "MRR": 0.817,
+          "scope": "headline"
+        },
+        "procedure": {
+          "n": 37,
+          "R@1": 0.622,
+          "R@5": 0.892,
+          "R@10": 0.946,
+          "MRR": 0.736,
+          "scope": "headline"
+        },
+        "prose-section": {
+          "n": 7,
+          "R@1": 0.714,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 0.821,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        },
+        "session-archive": {
+          "n": 3,
+          "R@1": 0.333,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.4,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        }
+      },
+      "runtime_config": {
+        "engine_arg": "v3",
+        "env_flags": {
+          "MEMORY_V4_FEDERATED": "1",
+          "MEMORY_V4_FED_PENALTY": "0.03",
+          "MEMORY_V4_MEMORYD": "1"
+        },
+        "effective_engine": "v3",
+        "minerva_db_mtime": "2026-08-23T13:19:24Z",
+        "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+        "golden_is_frozen_snapshot": true,
+        "golden_mtime": "2026-08-14T19:45:42Z",
+        "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_md5": "693c881dcd41112e0e715bff52a9e150",
+        "golden_live_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_differs_from_live": false,
+        "orig_193_sha256": "8c3f5ab058761703676b157524307750b3ed069032353e9d8f7e5dda1b28e9b6",
+        "recall2_mtime": "2026-08-23T13:00:09Z",
+        "embed_model": "nomic (archival_notes.embedding, index-time)",
+        "host": "lumen",
+        "scoring_semantics": "wq595"
+      }
+    }
+  },
+  {
+    "penalty": 0.05,
+    "path": "/home/lumen/minerva/eval/results_wq603_p005_20260823_1320.json",
+    "summary": {
+      "label": "wq603_p005",
+      "ts": "2026-08-23T13:20:25Z",
+      "scoring_semantics": "wq595",
+      "set_size_total": 257,
+      "set_size_scored": 255,
+      "n_controls": 2,
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "top_k": 10,
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.778,
+        "R@5": 0.904,
+        "R@10": 0.937,
+        "MRR": 0.834
+      },
+      "R@1": 0.778,
+      "R@5": 0.904,
+      "R@10": 0.937,
+      "MRR": 0.834,
+      "n_headline": 239,
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.5,
+        "R@5": 0.8,
+        "R@10": 0.9,
+        "MRR": 0.637
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.772,
+        "R@5": 0.907,
+        "R@10": 0.948,
+        "MRR": 0.832
+      },
+      "legacy_wq572_headline_ALL_SCORED": {
+        "n": 255,
+        "R@1": 0.761,
+        "R@5": 0.898,
+        "R@10": 0.937,
+        "MRR": 0.82
+      },
+      "lat_p50_ms": 232.8,
+      "lat_p95_ms_INFO_ONLY": 300.6,
+      "misses_qids": [
+        57,
+        58,
+        59,
+        60,
+        66,
+        68,
+        73,
+        81,
+        86,
+        100,
+        214,
+        230,
+        231,
+        235,
+        238
+      ],
+      "federated_miss_qids": [
+        253
+      ],
+      "first_hit_tier_counts": {
+        "archival": 224,
+        "federated": 9
+      },
+      "per_class": {
+        "abstention": {
+          "n": 6,
+          "R@1": 0.0,
+          "R@5": 0.0,
+          "R@10": 0.0,
+          "MRR": 0.0,
+          "scope": "abstention-passrate (rank null BY DESIGN \u2014 see summary.abstention)"
+        },
+        "build": {
+          "n": 33,
+          "R@1": 0.909,
+          "R@5": 0.939,
+          "R@10": 1.0,
+          "MRR": 0.931,
+          "scope": "headline"
+        },
+        "contradiction-resolution": {
+          "n": 5,
+          "R@1": 0.6,
+          "R@5": 0.6,
+          "R@10": 0.6,
+          "MRR": 0.6,
+          "scope": "headline"
+        },
+        "decision": {
+          "n": 31,
+          "R@1": 0.839,
+          "R@5": 0.968,
+          "R@10": 0.968,
+          "MRR": 0.882,
+          "scope": "headline"
+        },
+        "gotcha": {
+          "n": 44,
+          "R@1": 0.818,
+          "R@5": 0.932,
+          "R@10": 0.955,
+          "MRR": 0.872,
+          "scope": "headline"
+        },
+        "hardware": {
+          "n": 21,
+          "R@1": 0.762,
+          "R@5": 0.905,
+          "R@10": 0.952,
+          "MRR": 0.823,
+          "scope": "headline"
+        },
+        "knowledge-update": {
+          "n": 6,
+          "R@1": 0.5,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.583,
+          "scope": "headline"
+        },
+        "milestone": {
+          "n": 1,
+          "R@1": 1.0,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 1.0,
+          "scope": "headline"
+        },
+        "outage-rca": {
+          "n": 61,
+          "R@1": 0.787,
+          "R@5": 0.885,
+          "R@10": 0.918,
+          "MRR": 0.833,
+          "scope": "headline"
+        },
+        "procedure": {
+          "n": 37,
+          "R@1": 0.622,
+          "R@5": 0.892,
+          "R@10": 0.946,
+          "MRR": 0.736,
+          "scope": "headline"
+        },
+        "prose-section": {
+          "n": 7,
+          "R@1": 0.571,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 0.75,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        },
+        "session-archive": {
+          "n": 3,
+          "R@1": 0.333,
+          "R@5": 0.333,
+          "R@10": 0.667,
+          "MRR": 0.375,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        }
+      },
+      "runtime_config": {
+        "engine_arg": "v3",
+        "env_flags": {
+          "MEMORY_V4_FEDERATED": "1",
+          "MEMORY_V4_FED_PENALTY": "0.05",
+          "MEMORY_V4_MEMORYD": "1"
+        },
+        "effective_engine": "v3",
+        "minerva_db_mtime": "2026-08-23T13:20:25Z",
+        "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+        "golden_is_frozen_snapshot": true,
+        "golden_mtime": "2026-08-14T19:45:42Z",
+        "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_md5": "693c881dcd41112e0e715bff52a9e150",
+        "golden_live_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_differs_from_live": false,
+        "orig_193_sha256": "8c3f5ab058761703676b157524307750b3ed069032353e9d8f7e5dda1b28e9b6",
+        "recall2_mtime": "2026-08-23T13:00:09Z",
+        "embed_model": "nomic (archival_notes.embedding, index-time)",
+        "host": "lumen",
+        "scoring_semantics": "wq595"
+      }
+    }
+  },
+  {
+    "penalty": 0.08,
+    "path": "/home/lumen/minerva/eval/results_wq603_p008_20260823_1321.json",
+    "summary": {
+      "label": "wq603_p008",
+      "ts": "2026-08-23T13:21:27Z",
+      "scoring_semantics": "wq595",
+      "set_size_total": 257,
+      "set_size_scored": 255,
+      "n_controls": 2,
+      "control_ok": true,
+      "control_results": {
+        "9001": {
+          "cls": "control-hit",
+          "raw_rank": 1
+        },
+        "9002": {
+          "cls": "control-miss",
+          "raw_rank": null
+        }
+      },
+      "top_k": 10,
+      "headline_scope": "retrieval-only (abstention + federated excluded, trap penalty applied)",
+      "headline": {
+        "n": 239,
+        "R@1": 0.778,
+        "R@5": 0.904,
+        "R@10": 0.937,
+        "MRR": 0.834
+      },
+      "R@1": 0.778,
+      "R@5": 0.904,
+      "R@10": 0.937,
+      "MRR": 0.834,
+      "n_headline": 239,
+      "abstention": {
+        "n": 6,
+        "pass_rate": 0.5,
+        "failed_qids": [
+          240,
+          241,
+          243
+        ],
+        "abstain_k": 5
+      },
+      "federated_coverage": {
+        "n": 10,
+        "R@1": 0.3,
+        "R@5": 0.6,
+        "R@10": 0.9,
+        "MRR": 0.466
+      },
+      "trap": {
+        "n_trap_rows": 16,
+        "trap_at1_rate": 0.25,
+        "trap_at1_qids": [
+          230,
+          238,
+          241,
+          243
+        ],
+        "penalized_qids": [
+          230,
+          231,
+          235,
+          238
+        ],
+        "penalty_classes": [
+          "contradiction-resolution",
+          "knowledge-update"
+        ],
+        "note": "trap@1 is alarmed on ANY increase \u2014 retrieval is deterministic here, so a rise is a real regression"
+      },
+      "orig_193": {
+        "n": 193,
+        "R@1": 0.772,
+        "R@5": 0.907,
+        "R@10": 0.948,
+        "MRR": 0.832
+      },
+      "legacy_wq572_headline_ALL_SCORED": {
+        "n": 255,
+        "R@1": 0.753,
+        "R@5": 0.89,
+        "R@10": 0.937,
+        "MRR": 0.814
+      },
+      "lat_p50_ms": 234.1,
+      "lat_p95_ms_INFO_ONLY": 304.7,
+      "misses_qids": [
+        57,
+        58,
+        59,
+        60,
+        66,
+        68,
+        73,
+        81,
+        86,
+        100,
+        214,
+        230,
+        231,
+        235,
+        238
+      ],
+      "federated_miss_qids": [
+        253
+      ],
+      "first_hit_tier_counts": {
+        "archival": 224,
+        "federated": 9
+      },
+      "per_class": {
+        "abstention": {
+          "n": 6,
+          "R@1": 0.0,
+          "R@5": 0.0,
+          "R@10": 0.0,
+          "MRR": 0.0,
+          "scope": "abstention-passrate (rank null BY DESIGN \u2014 see summary.abstention)"
+        },
+        "build": {
+          "n": 33,
+          "R@1": 0.909,
+          "R@5": 0.939,
+          "R@10": 1.0,
+          "MRR": 0.931,
+          "scope": "headline"
+        },
+        "contradiction-resolution": {
+          "n": 5,
+          "R@1": 0.6,
+          "R@5": 0.6,
+          "R@10": 0.6,
+          "MRR": 0.6,
+          "scope": "headline"
+        },
+        "decision": {
+          "n": 31,
+          "R@1": 0.839,
+          "R@5": 0.968,
+          "R@10": 0.968,
+          "MRR": 0.887,
+          "scope": "headline"
+        },
+        "gotcha": {
+          "n": 44,
+          "R@1": 0.818,
+          "R@5": 0.932,
+          "R@10": 0.955,
+          "MRR": 0.872,
+          "scope": "headline"
+        },
+        "hardware": {
+          "n": 21,
+          "R@1": 0.762,
+          "R@5": 0.905,
+          "R@10": 0.952,
+          "MRR": 0.823,
+          "scope": "headline"
+        },
+        "knowledge-update": {
+          "n": 6,
+          "R@1": 0.5,
+          "R@5": 0.667,
+          "R@10": 0.667,
+          "MRR": 0.583,
+          "scope": "headline"
+        },
+        "milestone": {
+          "n": 1,
+          "R@1": 1.0,
+          "R@5": 1.0,
+          "R@10": 1.0,
+          "MRR": 1.0,
+          "scope": "headline"
+        },
+        "outage-rca": {
+          "n": 61,
+          "R@1": 0.787,
+          "R@5": 0.885,
+          "R@10": 0.918,
+          "MRR": 0.833,
+          "scope": "headline"
+        },
+        "procedure": {
+          "n": 37,
+          "R@1": 0.622,
+          "R@5": 0.892,
+          "R@10": 0.946,
+          "MRR": 0.736,
+          "scope": "headline"
+        },
+        "prose-section": {
+          "n": 7,
+          "R@1": 0.286,
+          "R@5": 0.714,
+          "R@10": 1.0,
+          "MRR": 0.509,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        },
+        "session-archive": {
+          "n": 3,
+          "R@1": 0.333,
+          "R@5": 0.333,
+          "R@10": 0.667,
+          "MRR": 0.367,
+          "scope": "federated-coverage (#573 target; 0.000 EXPECTED pre-adoption)"
+        }
+      },
+      "runtime_config": {
+        "engine_arg": "v3",
+        "env_flags": {
+          "MEMORY_V4_FEDERATED": "1",
+          "MEMORY_V4_FED_PENALTY": "0.08",
+          "MEMORY_V4_MEMORYD": "1"
+        },
+        "effective_engine": "v3",
+        "minerva_db_mtime": "2026-08-23T13:21:27Z",
+        "golden_path": "/home/lumen/minerva/eval/golden_v4_frozen_20260814.jsonl",
+        "golden_is_frozen_snapshot": true,
+        "golden_mtime": "2026-08-14T19:45:42Z",
+        "golden_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_md5": "693c881dcd41112e0e715bff52a9e150",
+        "golden_live_sha256": "8ba5afb0ce12585606b8dcff5ffb8245af24b0f0f32ccbddf3d4121f1bbf46b7",
+        "golden_differs_from_live": false,
+        "orig_193_sha256": "8c3f5ab058761703676b157524307750b3ed069032353e9d8f7e5dda1b28e9b6",
+        "recall2_mtime": "2026-08-23T13:00:09Z",
+        "embed_model": "nomic (archival_notes.embedding, index-time)",
+        "host": "lumen",
+        "scoring_semantics": "wq595"
+      }
+    }
+  }
+]
