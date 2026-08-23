@@ -28,7 +28,7 @@ import urllib.request
 DB = os.environ.get("PA_DB", "/home/lumen/minerva/predicate_audit.db")
 BASE = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000")
 DEFAULT_MODELS = os.environ.get(
-    "PA_MODELS", "qwen36-local,nephthys-qwen3-14b,isis-qwen3-32b")
+    "PA_MODELS", "qwen36-local,isis-qwen3-32b")
 SUMMARY = "/home/lumen/minerva/reports/predicate_audit_latest.json"
 NTFY = "http://127.0.0.1:8080/lumen-alerts"
 THRESHOLD = float(os.environ.get("PA_THRESHOLD", "0.5"))

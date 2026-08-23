@@ -22,7 +22,7 @@ import xml.etree.ElementTree as ET
 DB = os.environ.get("PELICAN_DB", "/home/lumen/minerva/pelican_bench.db")
 BASE = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000")
 DEFAULT_MODELS = os.environ.get(
-    "PELICAN_MODELS", "qwen36-local,nephthys-qwen3-14b,isis-qwen3-32b")
+    "PELICAN_MODELS", "qwen36-local,isis-qwen3-32b")
 MAX_TOKENS = int(os.environ.get("PELICAN_MAX_TOKENS", "1800"))
 TIMEOUT = int(os.environ.get("PELICAN_TIMEOUT", "600"))
 

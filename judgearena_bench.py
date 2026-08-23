@@ -26,7 +26,7 @@ BASE = os.environ.get("LITELLM_BASE_URL", "http://127.0.0.1:4000/v1")
 SEED = 20260810
 N_BATTLES = int(os.environ.get("JAB_BATTLES", "30"))
 DEFAULT_MODELS = os.environ.get(
-    "JAB_MODELS", "deepseek-v4-flash,qwen36-local,nephthys-qwen3-14b,isis-qwen3-32b")
+    "JAB_MODELS", "deepseek-v4-flash,qwen36-local,isis-qwen3-32b")
 MAX_OUT = int(os.environ.get("JAB_MAX_OUT", "1500"))
 
 def _key():
