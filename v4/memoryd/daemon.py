@@ -394,6 +394,14 @@ def main():
     srv.daemon_threads = True
     sys.stderr.write("lumen-memoryd listening on %s:%d db=%s contract=%s\n"
                      % (HOST, PORT, DB, K.contract_sha[:16]))
+    # wq#1051: demand-idle liveness beat (wq#392/#1043 helper). Idle is healthy
+    # for this server, so a plain liveness beat is correct -- progress-tied
+    # would false-kill during quiet periods. Fail-open no-op if NOTIFY_SOCKET
+    # unset (Type!=notify). beat_forever() sends READY=1 itself on thread start.
+    sys.path.insert(0, "/home/lumen/agent")
+    from lumen_watchdog_notify import Watchdog, beat_forever
+    _wd = Watchdog()
+    beat_forever(_wd, 10)
     srv.serve_forever()
 
 

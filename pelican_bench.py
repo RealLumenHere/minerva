@@ -27,10 +27,14 @@ MAX_TOKENS = int(os.environ.get("PELICAN_MAX_TOKENS", "1800"))
 TIMEOUT = int(os.environ.get("PELICAN_TIMEOUT", "600"))
 
 def _key():
-    for line in open("/home/lumen/agent/.env"):
-        if line.startswith("LITELLM_MASTER_KEY="):
-            return line.split("=", 1)[1].strip().strip('"')
-    raise RuntimeError("LITELLM_MASTER_KEY not found")
+    # wq#903: was reading agent/.env's LITELLM_MASTER_KEY (ops-emergency, shared/
+    # misattributed) instead of the dedicated minerva-bench key already minted
+    # for this exact cluster (costbench/judgearena/pelican/recall).
+    env = os.environ.get("LITELLM_MASTER_KEY")
+    if env:
+        return env
+    with open("/home/lumen/.secrets/litellm-service-keys/minerva-bench.key") as f:
+        return f.read().strip()
 
 # ---------- probes (fixed prompts + deterministic scorers, 0.0-1.0) ----------
 
