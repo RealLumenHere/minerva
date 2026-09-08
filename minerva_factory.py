@@ -26,6 +26,9 @@ Usage:
                                     /etc/systemd/system + enable/start (human-gated;
                                     undoes itself if the unit does not come up)
   minerva-factory run [N]           plan batch + auto-apply GREEN + stage YELLOW
+  minerva-factory close <proposal_id> --applied | --reject "why"
+                                    finish a promoted proposal from its wq ticket (wq#1535):
+                                    --applied runs the health check, deployed only on PASS
   minerva-factory replan [N] [--apply]
                                     re-plan proposals parked at planned/staged whose
                                     RED/YELLOW verdict came from the pre-factpack planner
@@ -44,6 +47,20 @@ MODEL_2 = os.environ.get('FACTORY_MODEL_2', 'cerebras-oss-120b')
 LITELLM_CONFIG = '/home/lumen/agent/litellm_config.yaml'
 SCRIPTS_DIR = Path('/home/lumen/factory/scripts')
 APPROVALS_DIR = Path('/home/lumen/instructions/approvals')
+FACTORY_BIN = 'minerva-factory'   # /home/lumen/bin symlink to this file, on PATH; bare on purpose: /home/lumen/bin is not a granted read root (wq#1535)
+
+
+def approval_path(plan_id):
+    """wq#1535: the ONE place the yellow-approval touch file is named. The promoter's
+    tickets used to spell it without the F prefix, so a worker touched the wrong file."""
+    return APPROVALS_DIR / f'F{plan_id}.approved'
+
+
+def approval_cmds(plan_id, verb='apply'):
+    """The exact two-step a human/worker runs to approve and apply a YELLOW plan. Also
+    the only apply command shape that succeeds: apply_plan wants --approved AND the file."""
+    return (f'touch {approval_path(plan_id)}',
+            f'{FACTORY_BIN} {verb} {plan_id} --approved')
 NTFY_TOPIC = 'http://127.0.0.1:8080/lumen-alerts'  # self-hosted; reaches aq subscriber + Frank's phone (TS). Public ntfy.sh retired for this publisher 2026-08-09.
 # new_service is GREEN because its applier is STAGE-ONLY: it writes an inert
 # bundle under /home/lumen/factory/staged/, installs nothing into /etc, enables
@@ -478,8 +495,8 @@ def apply_new_service(plan, rec):
         + f'    sudo systemctl daemon-reload\n'
         f'    sudo systemctl enable --now {name}.' + ('timer' if timer else 'service') + '\n\n'
         f'Or, with the approval gate:\n'
-        f'    touch {APPROVALS_DIR}/F<plan_id>.approved\n'
-        f'    python3 /home/lumen/minerva/minerva_factory.py install <plan_id>\n\n'
+        f'    {approval_cmds("<plan_id>", "install")[0]}\n'
+        f'    {approval_cmds("<plan_id>", "install")[1]}\n\n'
         f'To discard: rm -r {dest}\n')
     return True, f'service bundle staged inert at {dest} (nothing installed or started)'
 
@@ -759,6 +776,31 @@ def verify_proposal(proposal_id):
     return ok, detail
 
 
+def close_proposal(proposal_id, applied=False, reject=None):
+    """wq#1535: the ticket-facing way to finish a promoted proposal. Replaces the raw
+    `sqlite3 minerva.db UPDATE ... status='deployed'` line the promoter used to print
+    (an excluded-root path in every ticket body, and a wq#675 doctrine violation: deployed
+    is never a flag-flip). --applied -> applied_unverified, then verify_proposal decides
+    deployed vs applied_unverified on a real health check. --reject "why" -> reject +
+    decided_at + decision_reason, the same vocabulary minerva_eval/defer_review use."""
+    c = db()
+    prop = c.execute('SELECT id, status FROM proposals WHERE id=?', (proposal_id,)).fetchone()
+    if not prop:
+        c.close(); return False, f'proposal {proposal_id} not found'
+    if reject is not None:
+        c.execute("UPDATE proposals SET status='reject', decided_at=?, decision_reason=? WHERE id=?",
+                  (now(), f'wq#1535 close: {reject}'[:500], proposal_id))
+        c.commit(); c.close()
+        episode_commit(f'factory close REJECT {proposal_id}: {reject[:120]}')
+        return True, f'{proposal_id} {prop["status"]} -> reject'
+    if not applied:
+        c.close(); return False, 'give --applied or --reject "why"'
+    c.execute("UPDATE proposals SET status='applied_unverified', deployed_at=NULL WHERE id=?", (proposal_id,))
+    c.commit(); c.close()
+    ok, detail = verify_proposal(proposal_id)
+    return ok, f'{proposal_id} {prop["status"]} -> ' + ('deployed' if ok else 'applied_unverified') + f' ({detail[:160]})'
+
+
 def apply_plan(plan_id, approved=False):
     c = db()
     row = c.execute('SELECT * FROM plans WHERE id=?', (plan_id,)).fetchone()
@@ -771,9 +813,9 @@ def apply_plan(plan_id, approved=False):
     if row['lane'] == 'red':
         return False, 'RED lane - Frank required: ' + ','.join(gates.get('lane_reasons', []))
     if row['lane'] == 'yellow':
-        ok_file = APPROVALS_DIR / f'F{plan_id}.approved'
+        ok_file = approval_path(plan_id)
         if not (approved and ok_file.exists()):
-            return False, f'YELLOW - needs approval: touch {ok_file}'
+            return False, 'YELLOW - needs approval: ' + ' && '.join(approval_cmds(plan_id))
     if not gates.get('all_passed'):
         return False, 'gates_failed: ' + json.dumps(gates.get('checks', {}))[:300]
     applier = APPLIERS.get(row['change_type'])
@@ -828,9 +870,9 @@ def install_staged_service(plan_id, approved=False):
         return False, f"not_a_service_plan:{row['change_type']}"
     if row['status'] != 'applied':
         return False, f"bundle_not_staged_yet:status={row['status']}"
-    ok_file = APPROVALS_DIR / f'F{plan_id}.approved'
+    ok_file = approval_path(plan_id)
     if not (approved and ok_file.exists()):
-        return False, f'needs approval: touch {ok_file} then re-run with --approved'
+        return False, 'needs approval: ' + ' && '.join(approval_cmds(plan_id, 'install'))
     params = json.loads(row['params'] or '{}')
     name = params.get('name', '')
     src = STAGED_DIR / name
@@ -916,8 +958,8 @@ def stage_yellow(plan_id):
         f'## draft diff\n{row["draft_diff"] or "(see params)"}\n\n'
         f'## params\n{row["params"]}\n\n'
         f'## apply/health/rollback\n{row["apply_cmd"]}\n{row["health_cmd"]}\n{row["rollback_cmd"]}\n\n'
-        f'## to approve\ntouch {APPROVALS_DIR}/F{plan_id}.approved\n'
-        f'then: python3 /home/lumen/minerva/minerva_factory.py apply {plan_id} --approved\n')
+        f'## to approve\n{approval_cmds(plan_id)[0]}\n'
+        f'then: {approval_cmds(plan_id)[1]}\n')
     return str(req)
 
 def cmd_run(n, do_apply):
@@ -941,6 +983,7 @@ def cmd_run(n, do_apply):
         elif lane == 'yellow':
             staged_msgs.append(f'F{pid}: {prop["title"][:60]}')
             stage_yellow(pid)
+        _promote_parked(prop, lane, tally)
     if staged_msgs:
         _ntfy('FACTORY staged ' + str(len(staged_msgs)) + ' YELLOW plans for approval:\n' + chr(10).join(staged_msgs[:10]))
     log(f'factory done: {tally}')
@@ -976,8 +1019,29 @@ def cmd_replan(n, do_apply=False, lanes=('red', 'yellow')):
             log(f'  {"APPLIED" if ok else "FAILED"}: {detail[:150]}')
         elif lane == 'yellow':
             stage_yellow(pid)
+        _promote_parked(prop, lane, tally)
     log(f'replan done: {tally}')
     return tally
+
+
+def _promote_parked(prop, lane, tally):
+    """wq#1500: a YELLOW/RED plan parks the proposal with no owner. Hand it to wq
+    (minerva_promote: idempotent, CVE -> P1, grounding attached). GREEN is applied
+    by the factory itself. Fail-open: never breaks the factory run; MINERVA_PROMOTE=0 disables."""
+    if lane == 'green' or os.environ.get('MINERVA_PROMOTE', '1') == '0':
+        return
+    try:
+        sys.path.insert(0, '/home/lumen/minerva')
+        import minerva_promote
+        minerva_promote.migrate()
+        c = db()
+        row = c.execute('SELECT * FROM proposals WHERE id=?', (prop['id'],)).fetchone()
+        tid, action = minerva_promote.promote(row, c)
+        c.close()
+        tally['promoted'] = tally.get('promoted', 0) + (1 if action in ('added', 'merged', 'relinked') else 0)
+        log(f'  promote [{action}] wq#{tid} <- {prop["id"]}')
+    except Exception as e:
+        log(f'  promote skipped (fail-open): {type(e).__name__}: {str(e)[:120]}')
 
 
 def main():
@@ -1052,6 +1116,14 @@ def main():
         c.commit(); c.close()
         if reclassified:
             print(f'  {reclassified} planless proposals reclassified to applied_unverified')
+    elif a[0] == 'close':
+        # close <proposal_id> --applied | --reject "why"   (wq#1535)
+        if len(a) < 3:
+            print('usage: minerva-factory close <proposal_id> --applied | --reject "why"'); sys.exit(1)
+        why = a[a.index('--reject') + 1] if '--reject' in a and len(a) > a.index('--reject') + 1 else None
+        ok, detail = close_proposal(a[1], applied='--applied' in a, reject=why)
+        print(('OK: ' if ok else 'NO: ') + detail)
+        sys.exit(0 if ok else 1)
     elif a[0] == 'replan':
         n = int(a[1]) if len(a) > 1 and a[1].isdigit() else 5
         cmd_replan(n, do_apply='--apply' in a)
