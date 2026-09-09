@@ -482,18 +482,28 @@ def _find_report(pid):
 
 def _find_note(pid):
     """The fleet claims a prompt by renaming it, and moves it to done/ when the
-    research note is written - so any file carrying the id under done/ counts."""
+    research note is written - so any file carrying the id under done/ counts.
+
+    NEVER returns a .formfail file. _requeue_formless renames a note that came back
+    without its verdict line to <name>.formfail, and that name still carries the id
+    prefix this function matches on. Today the re-run note happens to win because
+    done/ is scanned before scratch/research/, but that is accidental: iterdir()
+    order is arbitrary, so a .formfail sibling in the SAME directory could be handed
+    back instead. The reaper would then re-read the note it already rejected, spend
+    the proposal's one re-run allowance on it, and retire it unjudged - reviving the
+    exact defect wq#1559 exists to remove."""
     for d in (DONE, PROMPTS):
         try:
             for f in d.iterdir():
-                if PREFIX + pid in f.name and f.is_file():
+                if PREFIX + pid in f.name and f.is_file() and not f.name.endswith('.formfail'):
                     return f
         except Exception:
             pass
     res = Path('/home/lumen/scratch/research')
     try:
         for f in res.glob(f'*{pid}*'):
-            return f
+            if not f.name.endswith('.formfail'):
+                return f
     except Exception:
         pass
     return None
