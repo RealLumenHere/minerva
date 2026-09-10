@@ -21,6 +21,7 @@ Usage:
 """
 import sys, json, subprocess, sqlite3
 from lumen_state import ingest, current
+from lumen_coverage import Coverage
 
 # lowercased tailscale HostName -> store subject (for names that don't map directly)
 ALIASES = {
@@ -58,6 +59,8 @@ def main():
     known = known_subjects()
     cur = {(r['subject'], r['predicate']): r['value'] for r in current(predicate='tailscale_ip')}
     changes, flags = [], []
+    # wq#1611: "no drift" and "nothing checked" must not print the same line.
+    cov, seen = Coverage('state_reconcile:tailscale_ip'), set()
     for host, ip, online in ts_status():
         if not ip:
             continue
@@ -68,20 +71,33 @@ def main():
             if online:
                 flags.append((host, ip))   # unknown online peer -> review
             continue
+        seen.add(subj)
         old = cur.get((subj, 'tailscale_ip'))
-        if old == ip:
+        if old is None:
+            cov.count('unverifiable', 'no-fact')   # on the wire, absent from the store
             continue
+        if old == ip:
+            cov.count('matched')
+            continue
+        cov.count('drifted')
         changes.append((subj, old, ip))
         if not dry:
             ingest(subj, 'tailscale_ip', ip, source_ref='reconcile:tailscale')
+    for subj, _pred in cur:
+        if subj not in seen:
+            cov.count('unverifiable', 'not-seen')  # in the store, never offered by the wire
 
     tag = 'DRY-RUN' if dry else 'APPLIED'
+    print(f'[{tag}] {cov.line()}')
     if changes:
         print(f'[{tag}] tailscale_ip reconciled:')
         for subj, old, ip in changes:
             print(f'  {subj}: {old} -> {ip}')
-    else:
+    elif cov.clean():
         print(f'[{tag}] no tailscale_ip drift; store matches the wire.')
+    else:
+        print(f'[{tag}] no tailscale_ip drift among the {cov.matched} subject(s) compared, '
+              f'but {cov.unverifiable} could not be checked - NOT a clean run.')
     if flags:
         print('UNKNOWN online peers (review; not auto-ingested):')
         for host, ip in flags:

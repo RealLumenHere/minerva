@@ -246,6 +246,24 @@ def origin_stats(conn, days=7):
         "WHERE created_at > datetime('now', ?) GROUP BY 1,2 ORDER BY 3 DESC",
         (f'-{days} days',)).fetchall()
 
+def coverage_section(counts, prev, delta, err=''):
+    """wq#1611 report block. `## Stale prose flagged (0)` says nothing about the
+    facts nobody re-checked; these lines do."""
+    if counts is None:
+        return [f'- coverage FAILED: {err}']
+    import lumen_coverage as _cov
+    L = [f'- {_cov.fact_line(counts)}']
+    if delta is None:
+        L.append('- week over week: no snapshot from a week ago yet; baseline recorded')
+    else:
+        L.append(f'- week over week: stale+unverifiable {_cov.unverified(prev)} -> '
+                 f'{_cov.unverified(counts)} ({delta:+d})'
+                 + (' ⚠️ REGRESSED — aq row raised' if delta > 0 else ''))
+    L.append('- UNVERIFIABLE = no fact declares when it should be re-checked; it is a '
+             'coverage gap, not a decay verdict (§3.6).')
+    return L
+
+
 def run():
     conn = sqlite3.connect(DB, timeout=30)
     stale = stale_prose_scan(conn)
@@ -269,6 +287,16 @@ def run():
         instinct_err = f'{type(e).__name__}: {e}'[:160]
     emb_ok, emb_pending = embed_retry(conn)                          # P4: fail-closed embeds
     ostats = origin_stats(conn)                                      # P5
+    # wq#1611: the weekly hook for fact coverage. "Stale prose flagged (0)" above
+    # says nothing about the facts nobody re-checked; this does, and raises an aq
+    # row when stale+unverifiable rises week over week.
+    cov_counts, cov_prev, cov_delta = None, None, None
+    cov_err = ''
+    try:
+        import lumen_coverage as _cov
+        cov_counts, cov_prev, cov_delta = _cov.check(raise_aq=True)
+    except Exception as e:
+        cov_err = f'{type(e).__name__}: {e}'[:160]
     # wq#576 (V4 P4): usage-salience rollup + retention prune. Proposal-only like
     # everything else here -- the rollup writes note_salience (a derived table it
     # owns outright) and the prune drops raw log rows past the retention window.
@@ -334,8 +362,11 @@ def run():
          f'- claude_memory.md: {lines} lines, {secs} sections, core floor {core_t} tok'
          + ('  ⚠️ core>8K' if core_t > 8000 else ''),
          f'- episodic notes: {notes}   |   current fleet facts: {facts}', '',
-         f'## Stale prose flagged ({len(stale)})',
-         '_claude_memory.md lines citing an IP the bi-temporal store has SUPERSEDED:_' if stale else '_None — prose IPs match the store._']
+         '## Fact coverage (wq#1611)']
+    L += coverage_section(cov_counts, cov_prev, cov_delta, cov_err)
+    L += ['',
+          f'## Stale prose flagged ({len(stale)})',
+          '_claude_memory.md lines citing an IP the bi-temporal store has SUPERSEDED:_' if stale else '_None — prose IPs match the store._']
     for i, ip, subj, pred, curv, when, txt in stale:
         L.append(f'- **L{i}** cites `{ip}` — superseded {when}; current **{subj}.{pred} = {curv}**. `{txt}`')
     L += ['', f'## Duplicate episodes flagged ({len(dupes)})',
