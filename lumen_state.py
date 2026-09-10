@@ -19,7 +19,7 @@ deleted -> history + point-in-time stay queryable. This is what auto-expires
 CLI:
   lumen_state.py init
   lumen_state.py ingest <subject> <predicate> <value> [--valid-from ISO] [--source REF]
-  lumen_state.py current [subject] [predicate]
+  lumen_state.py current [subject] [predicate]   # + an evidence column per fact
   lumen_state.py asof <ISO_DATE> [subject] [predicate]
   lumen_state.py history <subject> <predicate>
 """
@@ -70,11 +70,14 @@ def _classify_fact(predicate, value):
     tier = 'core' if ((predicate in IDENTITY_PREDS and vlen <= 240) or vlen <= 120) else 'topic'
     return fc, tier
 
+def _cols(conn):
+    return {r[1] for r in conn.execute("PRAGMA table_info(state_facts)").fetchall()}
+
 def _migrate(conn):
     """Add nullable columns if missing (SQLite has no ADD COLUMN IF NOT EXISTS):
     half_life_days (decay rate) and last_confirmed_at (evidence-refresh anchor).
     Self-healing: safe to call from init/ingest/current."""
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(state_facts)").fetchall()}
+    cols = _cols(conn)
     if not cols:
         return  # table not created yet; init_schema's CREATE handles a fresh DB
     if 'half_life_days' not in cols:
@@ -83,6 +86,12 @@ def _migrate(conn):
     if 'last_confirmed_at' not in cols:
         conn.execute("ALTER TABLE state_facts ADD COLUMN last_confirmed_at TEXT")
         conn.commit()
+    # V3 P1 added these by hand-run backfill, so a DB built by init_schema alone
+    # was missing them and could not ingest at all (found by wq#1612's tests).
+    for col in ('fact_class', 'render_tier'):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE state_facts ADD COLUMN {col} TEXT")
+            conn.commit()
 
 def _age_days(valid_from, now=None):
     now = now or datetime.now(timezone.utc)
@@ -109,6 +118,83 @@ def effective_confidence(stored, half_life_days, valid_from, now=None, last_conf
     anchor = last_confirmed_at or valid_from
     age = _age_days(anchor, now)
     return float(stored) * (0.5 ** (age / float(half_life_days)))
+
+# ── wq#1612: staleness -- ordinal, visible, never a probability ──────────────
+# MINERVA_STALENESS_REVIEW.md §3.6. The calibration caveat above applies here
+# too: this orders facts and prompts reconfirmation. It is NEVER rendered as
+# "N% true", and there is deliberately no probability behind it.
+FRESH, DUE, STALE = 'FRESH', 'DUE', 'STALE'
+UNVERIFIABLE, CONTRADICTED = 'UNVERIFIABLE', 'CONTRADICTED'
+
+# Evidence TTL per fact_class when the fact carries no verify_interval_days (§3.3).
+# None = no probe owns the class: narrative prose is the prose lifecycle's job,
+# so it reads as UNVERIFIABLE (a coverage gap) rather than as decay.
+VERIFY_INTERVAL_CLASS_DAYS = {'status': 3.0, 'config': 14.0,
+                              'identity': 90.0, 'narrative': None}
+VERIFY_INTERVAL_DEFAULT_DAYS = 14.0
+DUE_RATIO, STALE_RATIO = 1.0, 3.0
+
+# Columns 3.1 adds and the verifier registry (fix #6) populates. current() selects
+# whichever of them exist, so this file works before and after that migration.
+STALENESS_COLS = ('verify_recipe', 'verify_interval_days', 'contradicted_at')
+
+def verify_interval_days(row):
+    """Evidence TTL for one fact: explicit verify_interval_days, else the
+    fact_class default. None => no probe owns this fact."""
+    explicit = row.get('verify_interval_days')
+    if explicit:
+        return float(explicit)
+    fc = row.get('fact_class') or ''
+    if fc in VERIFY_INTERVAL_CLASS_DAYS:
+        return VERIFY_INTERVAL_CLASS_DAYS[fc]
+    return VERIFY_INTERVAL_DEFAULT_DAYS
+
+def evidence_age_days(row, now=None):
+    """Days since the fact was last observed. last_confirmed_at is the
+    reconfirm-on-match anchor; valid_from covers facts never re-observed."""
+    return _age_days(row.get('last_confirmed_at') or row['valid_from'], now)
+
+def staleness(row, now=None):
+    """Ordinal staleness class per §3.6 -> (cls, evidence_age_days, interval).
+
+    Precedence: CONTRADICTED (hard, overrides all) > UNVERIFIABLE (coverage, not
+    decay) > the age ratio. `verify_recipe` is consulted only when the column is
+    present: the verifier registry (fix #6) lands after this, and reading its
+    absence as "no probe" would label every fact UNVERIFIABLE and drain the
+    signal this exists to add. When the column does land, a NULL recipe
+    classifies as UNVERIFIABLE with no further change here."""
+    age = evidence_age_days(row, now)
+    if row.get('contradicted_at'):
+        return CONTRADICTED, age, None
+    interval = verify_interval_days(row)
+    if interval is None or ('verify_recipe' in row and not row['verify_recipe']):
+        return UNVERIFIABLE, age, None
+    ratio = age / interval
+    cls = FRESH if ratio < DUE_RATIO else (DUE if ratio < STALE_RATIO else STALE)
+    return cls, age, interval
+
+def _evidence_label(cls, age, row):
+    """The evidence column `current` prints. Ordinal wording only."""
+    if cls == CONTRADICTED:
+        note = row.get('contradicted_by_note')
+        return f'[⚠ CONTRADICTED by note {note}]' if note else '[⚠ CONTRADICTED]'
+    if cls == UNVERIFIABLE:
+        return '[UNVERIFIABLE — no probe]'
+    days = int(round(age))
+    if cls == FRESH:
+        return '[verified today]' if days < 1 else f'[verified {days}d ago]'
+    probe = row.get('verify_recipe')
+    tail = f', probe {probe}' if probe else ' unverified'
+    return f'[{cls} — {days}d{tail}]'
+
+def annotate(row, now=None):
+    """Attach staleness class, evidence age and evidence label to a current()
+    row, in place. Display only -- nothing here is written back to the store."""
+    cls, age, _interval = staleness(row, now)
+    row['staleness'] = cls
+    row['evidence_age_days'] = age
+    row['evidence'] = _evidence_label(cls, age, row)
+    return row
 
 def init_schema(conn=None):
     own = conn is None
@@ -233,15 +319,18 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
 def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
             now=None, conn=None):
     """Open facts (valid_to IS NULL). Each row dict also carries `confidence`
-    (stored) and `eff_confidence` (read-time age-decayed). Rows whose
+    (stored), `eff_confidence` (read-time age-decayed) and the wq#1612 evidence
+    annotation (`staleness`, `evidence_age_days`, `evidence`). Rows whose
     eff_confidence < min_confidence are dropped (default 0.0 => keep all;
     soft-expiry is opt-in). Decay is never written back."""
     own = conn is None
     conn = conn or _conn()
     _migrate(conn)
-    q = ('SELECT subject,predicate,value,valid_from,source_ref,confidence,half_life_days,last_confirmed_at,'
-         'fact_class,render_tier '
-         'FROM state_facts WHERE valid_to IS NULL')
+    cols = ['subject', 'predicate', 'value', 'valid_from', 'source_ref', 'confidence',
+            'half_life_days', 'last_confirmed_at', 'fact_class', 'render_tier']
+    present = _cols(conn)
+    cols += [c for c in STALENESS_COLS if c in present]
+    q = f'SELECT {",".join(cols)} FROM state_facts WHERE valid_to IS NULL'
     p = []
     if subject:   q += ' AND subject=?';   p.append(subject.strip().lower())
     if predicate: q += ' AND predicate=?'; p.append(predicate.strip().lower())
@@ -259,7 +348,7 @@ def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
             last_confirmed_at=d.get('last_confirmed_at'))
         if d['eff_confidence'] < min_confidence:
             continue
-        rows.append(d)
+        rows.append(annotate(d, now=now))
     if own: conn.close()
     return rows
 
@@ -309,6 +398,7 @@ def _main():
     if a.cmd == 'current':
         for r in current(a.subject, a.predicate, limit=a.limit, min_confidence=a.min_confidence):
             line = f"{r['subject']:>10}.{r['predicate']:<14} = {r['value']}  (since {r['valid_from'][:10]})"
+            line += f"  {r['evidence']}"
             if r.get('eff_confidence', 1.0) < 0.99:
                 line += f"  [conf {r['eff_confidence']:.2f}]"
             print(line)
