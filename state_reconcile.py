@@ -82,7 +82,10 @@ def main():
         cov.count('drifted')
         changes.append((subj, old, ip))
         if not dry:
-            ingest(subj, 'tailscale_ip', ip, source_ref='reconcile:tailscale')
+            # wq#1634: source_kind='observed' -- this value came off the wire, so
+            # wq#1613's verifier is free to supersede it on a probe mismatch.
+            ingest(subj, 'tailscale_ip', ip, source_ref='reconcile:tailscale',
+                   source_kind='observed')
     for subj, _pred in cur:
         if subj not in seen:
             cov.count('unverifiable', 'not-seen')  # in the store, never offered by the wire

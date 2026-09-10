@@ -21,6 +21,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 import numpy as np
 from dotenv import load_dotenv
+
+import minerva_audit
 load_dotenv('/home/lumen/agent/.env')
 
 DB = Path('/home/lumen/minerva/minerva.db')
@@ -137,12 +139,19 @@ def _ensure_recall_fts():
 
 # ---------- Archival (cold, semantic) ----------
 
-def write_note(kind, title, content, tags=None, source_ref=None, origin=None, trust=None):
+def write_note(kind, title, content, tags=None, source_ref=None, origin=None, trust=None,
+               audit=None):
     # Memory V3 P5 provenance: env overrides let callers (e.g. convo-learn subprocess)
     # tag writes without CLI plumbing. Defaults = operator session.
     origin = origin or os.environ.get('LUMEN_MEM_ORIGIN', 'claude-session')
     trust = trust or os.environ.get('LUMEN_MEM_TRUST', 'operator')
-    """Persist an archival note with embedding for semantic retrieval."""
+    """Persist an archival note with embedding for semantic retrieval.
+
+    wq#1634: `audit` is an optional dict of minerva_audit.audit() kwargs (action,
+    source_ref, detail, source_kind). When given, the audit row is written on THIS
+    connection, so it commits with the note or not at all -- the same guarantee
+    memoryd's kernel gives lane writes. Default None keeps every existing caller
+    byte-identical; only the fail-open CLI commit path passes it today."""
     ARCHIVAL_DIR.mkdir(parents=True, exist_ok=True)
     nid = hashlib.md5(f'{kind}:{title}:{content[:200]}'.encode()).hexdigest()[:12]
     path = ARCHIVAL_DIR / f'{datetime.now(timezone.utc).strftime("%Y%m%d")}_{nid}_{kind}.md'
@@ -207,6 +216,8 @@ def write_note(kind, title, content, tags=None, source_ref=None, origin=None, tr
         (nid, kind[:40], title[:300], content[:8000], emb_bytes,
          ','.join(tags or [])[:500], (source_ref or '')[:300],
          datetime.now(timezone.utc).isoformat(), origin[:40], trust[:20]))
+    if audit is not None:
+        minerva_audit.audit(conn, table_name='archival_notes', row_id=nid, **audit)
     conn.commit()
     conn.close()
     log(f'  archival note: {nid} [{kind}] "{title[:60]}"')

@@ -19,14 +19,60 @@ CLI:
   lumen_episode.py precheck "<plan>"
   lumen_episode.py commit  --summary "..." --changed "a;b" --worked "c" --failed "d" --why "..." --tags "x,y"
   lumen_episode.py backfill                         # seed documented house-pathologies
+
+AUDITED WRITE PATH (wq#1634, MINERVA_PIPELINE_MAP.md §4.5): commit posts to memoryd
+/commit when the daemon is healthy and the session is registered; otherwise it falls
+back to a direct write that appends its own `memory_audit` row in the same
+transaction. Either way the note is answerable by SELECT on memory_audit.
 """
-import sys, argparse
+import os, json, sys, argparse
+import urllib.error
+import urllib.request
+
+import minerva_audit
 import minerva_memory as mm
 
 FAILURE_KINDS = {'failure', 'lesson', 'bug', 'pathology', 'outage'}
 
+MEMORYD_URL = os.environ.get('MEMORYD_URL', 'http://127.0.0.1:8139')
+MEMORYD_TIMEOUT = float(os.environ.get('MEMORYD_TIMEOUT', '4'))
+
+
+def _memoryd_commit(kind, title, content, tags, source_ref):
+    """POST the note to memoryd (wq#1634 / §4.5). Returns (note_id, None) when the
+    daemon accepted it -- the kernel wrote the audit row itself -- or (None, why)
+    so the caller can fall back to a direct write that keeps the trail.
+
+    A CLI session that holds no wq claim is refused by design (I-7): memoryd derives
+    the lane from a held ticket and will not take the writer's word for it. That is
+    the ordinary case here, not an error, which is why every failure is a fall-back
+    reason rather than an exception."""
+    agent = minerva_audit.agent_id()
+    if not agent:
+        return None, 'no $WQ_AGENT (memoryd needs a registered session)'
+    try:
+        with urllib.request.urlopen(MEMORYD_URL + '/healthz',
+                                    timeout=MEMORYD_TIMEOUT) as r:
+            if r.status != 200:
+                return None, f'healthz {r.status}'
+        body = json.dumps({'kind': kind, 'title': title, 'content': content,
+                           'tags': tags or [], 'source_ref': source_ref or ''}).encode()
+        req = urllib.request.Request(
+            MEMORYD_URL + '/commit', data=body, method='POST',
+            headers={'Content-Type': 'application/json', 'X-Memoryd-Agent': agent})
+        with urllib.request.urlopen(req, timeout=MEMORYD_TIMEOUT) as r:
+            resp = json.loads(r.read().decode() or '{}')
+    except urllib.error.HTTPError as e:
+        return None, f'commit HTTP {e.code}'
+    except Exception as e:
+        return None, f'{type(e).__name__}: {str(e)[:80]}'
+    if resp.get('status') in ('accept', 'noop') and resp.get('id'):
+        return resp['id'], None
+    return None, f"status={resp.get('status')} reason={str(resp.get('reason'))[:80]}"
+
+
 def commit(summary, changed=None, worked=None, failed=None, why='',
-           kind='session', tags=None, session_ref=''):
+           kind='session', tags=None, session_ref='', stated_by_frank=False):
     def _b(label, items):
         items = [i for i in (items or []) if i]
         return f'## {label}\n' + ('\n'.join(f'- {i}' for i in items) if items else '- (none)') + '\n'
@@ -36,7 +82,17 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
         _b('What failed', failed) + '\n' +
         f'## Why / lessons\n{why or "(none)"}\n'
     )
-    nid = mm.write_note(kind, summary[:200], content, tags=tags, source_ref=session_ref)
+    # wq#1634 §4.5: memoryd first (it audits and governs), direct write second.
+    # Today the fallback is the primary path for CLI sessions; it must not be the
+    # unaudited one.
+    nid, fell_back = _memoryd_commit(kind, summary[:200], content, tags, session_ref)
+    if nid is None:
+        nid = mm.write_note(
+            kind, summary[:200], content, tags=tags, source_ref=session_ref,
+            audit={'action': minerva_audit.WRITE, 'source_ref': session_ref,
+                   'detail': f'lumen_episode.commit fallback ({fell_back}) kind={kind}',
+                   'source_kind': minerva_audit.resolve_source_kind(stated_by_frank),
+                   'invariant': 'wq1634-fail-open'})
     # also drop a terse recall-tier event so FTS keyword search finds it fast
     fail_str = '; '.join(failed or [])
     mm.log_event(kind, f'{summary} :: changed={"; ".join(changed or [])} :: failed={fail_str} :: {why}'[:3500],
@@ -185,6 +241,8 @@ def _main():
     pc.add_argument('--worked', default=''); pc.add_argument('--failed', default='')
     pc.add_argument('--why', default=''); pc.add_argument('--kind', default='session')
     pc.add_argument('--tags', default=''); pc.add_argument('--ref', default='')
+    pc.add_argument('--stated-by-frank', action='store_true',
+                    help='wq#1634: Frank asserted this himself -> source_kind=frank_stated')
     a = ap.parse_args()
     if a.cmd == 'backfill':
         backfill()
@@ -199,7 +257,8 @@ def _main():
         sp = lambda s: [x.strip() for x in s.replace(';', ',').split(',') if x.strip()]
         nid = commit(a.summary, changed=sp(a.changed), worked=sp(a.worked),
                      failed=sp(a.failed), why=a.why, kind=a.kind,
-                     tags=sp(a.tags), session_ref=a.ref)
+                     tags=sp(a.tags), session_ref=a.ref,
+                     stated_by_frank=a.stated_by_frank)
         print(f'committed episode {nid}')
 
 if __name__ == '__main__':

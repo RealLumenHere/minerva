@@ -19,6 +19,7 @@ deleted -> history + point-in-time stay queryable. This is what auto-expires
 CLI:
   lumen_state.py init
   lumen_state.py ingest <subject> <predicate> <value> [--valid-from ISO] [--source REF]
+                        [--stated-by-frank] [--source-kind KIND]
   lumen_state.py current [subject] [predicate]   # + an evidence column per fact
   lumen_state.py asof <ISO_DATE> [subject] [predicate]
   lumen_state.py history <subject> <predicate>
@@ -30,9 +31,17 @@ synonym predicates to their owner (state_registry.json aliases), refuses predica
 the store has never seen unless the writer gives a reason (new_predicate), and
 treats `lifecycle` as a closed enum whose decommissioned/retired values close the
 subject's operational facts and refuse later operational writes.
+
+AUDITED WRITE PATH (wq#1634, MINERVA_PIPELINE_MAP.md §4.5): every accepted ingest
+appends a `memory_audit` row (table_name='state_facts', action=write|supersede|
+reconfirm, agent_id=$WQ_AGENT, lane read from the ticket in source_ref) INSIDE the
+same transaction as the fact, and stamps `source_kind` on the fact itself. "Who
+wrote this fact and from which ticket" is now a SELECT, not an archaeology project.
 """
 import sqlite3, sys, uuid, argparse, os, json, fnmatch, difflib
 from datetime import datetime, timezone
+
+import minerva_audit
 
 DB = '/home/lumen/minerva/minerva.db'
 REGISTRY_PATH = os.environ.get(
@@ -159,6 +168,13 @@ def _migrate(conn):
             predicate TEXT PRIMARY KEY, first_subject TEXT, why TEXT NOT NULL,
             agent TEXT, source_ref TEXT, added_at TEXT NOT NULL)''')
         conn.commit()
+    # wq#1634: how this fact came to be known (frank_stated / observed /
+    # agent_written / unattributed), stamped at ingest. Additive and nullable,
+    # matching wq#1613's own add-if-missing migration for the same column.
+    if 'source_kind' not in cols:
+        conn.execute("ALTER TABLE state_facts ADD COLUMN source_kind TEXT")
+        conn.commit()
+    minerva_audit.ensure_table(conn)
 
 def _age_days(valid_from, now=None):
     now = now or datetime.now(timezone.utc)
@@ -323,6 +339,13 @@ def _gate_predicate(conn, subject, predicate, new_predicate, source_ref, now, re
         f"those, write it there (supersession only works on the owner predicate). "
         f"If it is a genuinely new axis, pass --new-predicate '<why>'.")
 
+def closed_ids(conn, lifecycle_id):
+    """(id, predicate) of every row a lifecycle fact closed -- the wq#1700 `closed_by`
+    lineage column read back, so wq#1634 can audit each closure by row id."""
+    return [(r['id'], r['predicate']) for r in conn.execute(
+        'SELECT id, predicate FROM state_facts WHERE closed_by=? ORDER BY predicate',
+        (lifecycle_id,)).fetchall()]
+
 def _open_lifecycle(conn, subject, reg):
     return conn.execute(
         'SELECT id, value, valid_from FROM state_facts WHERE subject=? AND predicate=? '
@@ -347,14 +370,18 @@ def close_operational(conn, subject, lifecycle_id, lifecycle_valid_from, now, re
 
 def ingest(subject, predicate, value, valid_from=None, source_ref=None,
            confidence=1.0, half_life_days=None, episode_id=None, conn=None,
-           new_predicate=None):
+           new_predicate=None, stated_by_frank=False, source_kind=None):
     """Deterministic key-based supersession behind the wq#1700 gate.
-    Returns dict describing the action; raises StateGateError (nothing written)."""
+    Returns dict describing the action; raises StateGateError (nothing written).
+
+    wq#1634: every accepted write also appends a memory_audit row in the same
+    transaction, and stamps source_kind on the fact it writes."""
     own = conn is None
     conn = conn or _conn()
     try:
         return _ingest(conn, subject, predicate, value, valid_from, source_ref,
-                       confidence, half_life_days, episode_id, new_predicate)
+                       confidence, half_life_days, episode_id, new_predicate,
+                       stated_by_frank, source_kind)
     except Exception:
         if own: conn.rollback()
         raise
@@ -362,7 +389,8 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
         if own: conn.close()
 
 def _ingest(conn, subject, predicate, value, valid_from, source_ref,
-            confidence, half_life_days, episode_id, new_predicate):
+            confidence, half_life_days, episode_id, new_predicate,
+            stated_by_frank=False, source_kind=None):
     _migrate(conn)
     reg = registry()
     now = _now()
@@ -371,6 +399,15 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
     asked = predicate.strip().lower()
     predicate = canonical_predicate(asked, reg)
     value = str(value).strip()
+    # wq#1634: resolved BEFORE the gate so an invalid --source-kind is refused with
+    # the other gate errors, i.e. with nothing written.
+    kind = minerva_audit.resolve_source_kind(stated_by_frank, source_kind)
+    _lane = minerva_audit.ticket_lane(source_ref)
+
+    def _audit(action, row_id, detail=None):
+        minerva_audit.audit(conn, action, 'state_facts', row_id,
+                            source_ref=source_ref, detail=detail,
+                            source_kind=kind, lane=_lane)
 
     # ── wq#1700 gate: nothing below this block runs for a refused write ─────
     if predicate == reg['lifecycle']:
@@ -420,6 +457,8 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
         # untouched. history()/as_of() stay bit-for-bit reproducible.
         conn.execute('UPDATE state_facts SET last_confirmed_at=? WHERE id=?',
                      (now, open_row['id']))
+        _audit(minerva_audit.RECONFIRM, open_row['id'],
+               f'{subject}.{predicate}={value[:120]}')
         conn.commit()
         return {'action': 'reconfirmed', 'refreshed': True, 'subject': subject,
                 'predicate': predicate, 'value': value, **alias_note}
@@ -438,11 +477,15 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
             '''INSERT INTO state_facts
                (id, subject, predicate, value, valid_from, valid_to,
                 ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-                last_confirmed_at, episode_id, fact_class, render_tier, closed_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                last_confirmed_at, episode_id, fact_class, render_tier, closed_by,
+                source_kind)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (fid, subject, predicate, value, valid_from, open_row['valid_from'],
              now, now, source_ref, confidence, half_life_days, now, episode_id,
-             _fc, _tier, open_row['id']))
+             _fc, _tier, open_row['id'], kind))
+        _audit(minerva_audit.WRITE, fid,
+               f'{subject}.{predicate}={value[:120]} historical:older-than-current '
+               f'closed_by={open_row["id"]}')
         conn.commit()
         return {'action': 'historical_insert', 'subject': subject, 'predicate': predicate,
                 'value': value, 'note': 'older-than-current; inserted as closed historical row, open row unchanged',
@@ -461,11 +504,15 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
             '''INSERT INTO state_facts
                (id, subject, predicate, value, valid_from, valid_to,
                 ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-                last_confirmed_at, episode_id, fact_class, render_tier, closed_by)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                last_confirmed_at, episode_id, fact_class, render_tier, closed_by,
+                source_kind)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (fid, subject, predicate, value, valid_from, lc_closed['valid_from'],
              now, now, source_ref, confidence, half_life_days, now, episode_id,
-             _fc, _tier, lc_closed['id']))
+             _fc, _tier, lc_closed['id'], kind))
+        _audit(minerva_audit.WRITE, fid,
+               f'{subject}.{predicate}={value[:120]} historical:'
+               f'{subject}-is-{lc_closed["value"]} closed_by={lc_closed["id"]}')
         conn.commit()
         return {'action': 'historical_insert', 'subject': subject, 'predicate': predicate,
                 'value': value, 'note': f"{subject} is {lc_closed['value']}; inserted closed at "
@@ -483,13 +530,22 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
         '''INSERT INTO state_facts
            (id, subject, predicate, value, valid_from, valid_to,
             ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-            last_confirmed_at, episode_id, fact_class, render_tier)
-           VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?)''',
+            last_confirmed_at, episode_id, fact_class, render_tier, source_kind)
+           VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?)''',
         (fid, subject, predicate, value, valid_from, now, source_ref, confidence,
-         half_life_days, now, episode_id, _fc, _tier))
+         half_life_days, now, episode_id, _fc, _tier, kind))
+    _audit(minerva_audit.SUPERSEDE if open_row is not None else minerva_audit.WRITE,
+           fid, f'{subject}.{predicate}={value[:120]}'
+                + (f' prior={open_row["id"]}' if open_row is not None else ''))
     closed = []
     if predicate == reg['lifecycle'] and value in reg['closing']:
         closed = close_operational(conn, subject, fid, valid_from, now, reg)
+        # One row per closed sibling: a lifecycle closure IS a write to each of
+        # those facts, so "which writes touched this row" has to answer for them
+        # too, not just for the lifecycle fact that triggered them.
+        for cid, cpred in closed_ids(conn, fid):
+            _audit(minerva_audit.SUPERSEDE, cid,
+                   f'{subject}.{cpred} closed by lifecycle {value} ({fid})')
     conn.commit()
     res = {'action': action, 'subject': subject, 'predicate': predicate, 'value': value,
            'prior': (open_row['value'] if open_row else None), **alias_note}
@@ -607,6 +663,11 @@ def _main():
     pi.add_argument('--confidence', type=float, default=1.0); pi.add_argument('--half-life', type=float, default=None)
     pi.add_argument('--new-predicate', default=None, metavar='WHY',
                     help='wq#1700: reason for introducing a predicate state_facts has never seen')
+    pi.add_argument('--stated-by-frank', action='store_true',
+                    help='wq#1634: Frank asserted this himself -> source_kind=frank_stated, '
+                         'which wq#1613 never supersedes on a probe mismatch')
+    pi.add_argument('--source-kind', default=None, choices=minerva_audit.SOURCE_KINDS,
+                    help='override the stamped source_kind (probes pass "observed")')
     sub.add_parser('check')
     pc = sub.add_parser('current'); pc.add_argument('subject', nargs='?'); pc.add_argument('predicate', nargs='?')
     pc.add_argument('--limit', type=int, default=None); pc.add_argument('--min-confidence', type=float, default=0.0)
@@ -620,7 +681,9 @@ def _main():
         try:
             print(ingest(a.subject, a.predicate, a.value, valid_from=a.valid_from, source_ref=a.source,
                          confidence=a.confidence, half_life_days=a.half_life,
-                         new_predicate=a.new_predicate))
+                         new_predicate=a.new_predicate,
+                         stated_by_frank=a.stated_by_frank,
+                         source_kind=a.source_kind))
         except StateGateError as e:
             print(f'REFUSED ({type(e).__name__}): {e}', file=sys.stderr)
             sys.exit(2)
