@@ -22,11 +22,65 @@ CLI:
   lumen_state.py current [subject] [predicate]   # + an evidence column per fact
   lumen_state.py asof <ISO_DATE> [subject] [predicate]
   lumen_state.py history <subject> <predicate>
+  lumen_state.py check                           # wq#1700 invariants, exit 1 on violation
+
+ONE OWNER PER FACT (wq#1700, STATE_SINGLE_OWNER_DESIGN.md): the (subject,predicate)
+key only works if the predicate names the fact. ingest() therefore canonicalises
+synonym predicates to their owner (state_registry.json aliases), refuses predicates
+the store has never seen unless the writer gives a reason (new_predicate), and
+treats `lifecycle` as a closed enum whose decommissioned/retired values close the
+subject's operational facts and refuse later operational writes.
 """
-import sqlite3, sys, uuid, argparse
+import sqlite3, sys, uuid, argparse, os, json, fnmatch, difflib
 from datetime import datetime, timezone
 
 DB = '/home/lumen/minerva/minerva.db'
+REGISTRY_PATH = os.environ.get(
+    'LUMEN_STATE_REGISTRY',
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'state_registry.json'))
+
+class StateGateError(ValueError):
+    """A write refused by the wq#1700 gate. Nothing was written."""
+
+class PredicateNotRegistered(StateGateError):
+    pass
+
+class LifecycleValueError(StateGateError):
+    pass
+
+class LifecycleClosedError(StateGateError):
+    pass
+
+_REGISTRY = {}
+
+def registry(path=None):
+    """state_registry.json, loaded once per path. Missing file is a hard error:
+    a gate that silently opens when its policy file is gone is not a gate."""
+    path = path or REGISTRY_PATH
+    if path not in _REGISTRY:
+        with open(path) as f:
+            doc = json.load(f)
+        lc = doc.get('lifecycle', {})
+        _REGISTRY[path] = {
+            'lifecycle': lc.get('predicate', 'lifecycle'),
+            'enum': tuple(lc.get('enum', ())),
+            'closing': tuple(lc.get('closing', ())),
+            'aliases': dict(doc.get('aliases', {})),
+            'namespaces': dict(doc.get('open_namespaces', {})),
+            'core': set(doc.get('core_predicates', ())),
+            'operational': set(doc.get('operational_predicates', ())),
+            'op_patterns': tuple(doc.get('operational_patterns', ())),
+        }
+    return _REGISTRY[path]
+
+def is_operational(predicate, reg=None):
+    reg = reg or registry()
+    return predicate in reg['operational'] or any(
+        fnmatch.fnmatchcase(predicate, p) for p in reg['op_patterns'])
+
+def canonical_predicate(predicate, reg=None):
+    reg = reg or registry()
+    return reg['aliases'].get(predicate, predicate)
 
 def _now():
     return datetime.now(timezone.utc).isoformat()
@@ -92,6 +146,19 @@ def _migrate(conn):
         if col not in cols:
             conn.execute(f"ALTER TABLE state_facts ADD COLUMN {col} TEXT")
             conn.commit()
+    # wq#1700: lineage for closed rows (the fact id that closed it: a supersession,
+    # a lifecycle closure, or an alias owner). source_ref is never rewritten.
+    if 'closed_by' not in cols:
+        conn.execute("ALTER TABLE state_facts ADD COLUMN closed_by TEXT")
+        conn.commit()
+    # wq#1700: who introduced a predicate the store had never seen, and why.
+    # Checked via sqlite_master first so read-only callers never take a write lock.
+    if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                        "AND name='state_predicate_additions'").fetchone():
+        conn.execute('''CREATE TABLE IF NOT EXISTS state_predicate_additions (
+            predicate TEXT PRIMARY KEY, first_subject TEXT, why TEXT NOT NULL,
+            agent TEXT, source_ref TEXT, added_at TEXT NOT NULL)''')
+        conn.commit()
 
 def _age_days(valid_from, now=None):
     now = now or datetime.now(timezone.utc)
@@ -228,17 +295,107 @@ def init_schema(conn=None):
     _migrate(conn)
     if own: conn.close()
 
+def _gate_predicate(conn, subject, predicate, new_predicate, source_ref, now, reg):
+    """wq#1700 predicate gate. Accepts: open-namespace subject, registry predicate,
+    a predicate the store already has rows for, or a recorded addition. A new
+    predicate needs a reason, which is recorded. Returns the addition row to write
+    (inside the ingest transaction) or None. Raises PredicateNotRegistered."""
+    if subject in reg['namespaces']:
+        return None
+    if (predicate == reg['lifecycle'] or predicate in reg['core']
+            or is_operational(predicate, reg)):
+        return None
+    if conn.execute('SELECT 1 FROM state_facts WHERE predicate=? LIMIT 1',
+                    (predicate,)).fetchone():
+        return None
+    if conn.execute('SELECT 1 FROM state_predicate_additions WHERE predicate=?',
+                    (predicate,)).fetchone():
+        return None
+    if new_predicate and str(new_predicate).strip():
+        return (predicate, subject, str(new_predicate).strip(),
+                os.environ.get('WQ_AGENT'), source_ref, now)
+    known = {r[0] for r in conn.execute('SELECT DISTINCT predicate FROM state_facts')}
+    known |= reg['core'] | reg['operational'] | set(reg['aliases'])
+    near = difflib.get_close_matches(predicate, sorted(known), n=4, cutoff=0.6)
+    hint = f" Nearest existing: {', '.join(near)}." if near else ''
+    raise PredicateNotRegistered(
+        f"predicate '{predicate}' is new to state_facts.{hint} If this fact is one of "
+        f"those, write it there (supersession only works on the owner predicate). "
+        f"If it is a genuinely new axis, pass --new-predicate '<why>'.")
+
+def _open_lifecycle(conn, subject, reg):
+    return conn.execute(
+        'SELECT id, value, valid_from FROM state_facts WHERE subject=? AND predicate=? '
+        'AND valid_to IS NULL', (subject, reg['lifecycle'])).fetchone()
+
+def close_operational(conn, subject, lifecycle_id, lifecycle_valid_from, now, reg=None):
+    """Close every open operational fact on `subject` (wq#1700 §2). valid_to is the
+    lifecycle fact's valid_from, never earlier than the row's own valid_from.
+    source_ref untouched; closed_by = the lifecycle fact id. Caller commits."""
+    reg = reg or registry()
+    closed = []
+    for r in conn.execute(
+            'SELECT id, predicate, valid_from FROM state_facts WHERE subject=? '
+            'AND valid_to IS NULL AND predicate != ?', (subject, reg['lifecycle'])).fetchall():
+        if not is_operational(r['predicate'], reg):
+            continue
+        vt = max(r['valid_from'], lifecycle_valid_from)
+        conn.execute('UPDATE state_facts SET valid_to=?, invalidated_at=?, closed_by=? '
+                     'WHERE id=?', (vt, now, lifecycle_id, r['id']))
+        closed.append(r['predicate'])
+    return sorted(closed)
+
 def ingest(subject, predicate, value, valid_from=None, source_ref=None,
-           confidence=1.0, half_life_days=None, episode_id=None, conn=None):
-    """Deterministic key-based supersession. Returns dict describing the action."""
+           confidence=1.0, half_life_days=None, episode_id=None, conn=None,
+           new_predicate=None):
+    """Deterministic key-based supersession behind the wq#1700 gate.
+    Returns dict describing the action; raises StateGateError (nothing written)."""
     own = conn is None
     conn = conn or _conn()
+    try:
+        return _ingest(conn, subject, predicate, value, valid_from, source_ref,
+                       confidence, half_life_days, episode_id, new_predicate)
+    except Exception:
+        if own: conn.rollback()
+        raise
+    finally:
+        if own: conn.close()
+
+def _ingest(conn, subject, predicate, value, valid_from, source_ref,
+            confidence, half_life_days, episode_id, new_predicate):
     _migrate(conn)
+    reg = registry()
     now = _now()
     valid_from = valid_from or now
     subject = subject.strip().lower()
-    predicate = predicate.strip().lower()
+    asked = predicate.strip().lower()
+    predicate = canonical_predicate(asked, reg)
     value = str(value).strip()
+
+    # ── wq#1700 gate: nothing below this block runs for a refused write ─────
+    if predicate == reg['lifecycle']:
+        value = value.lower()
+        if value not in reg['enum']:
+            raise LifecycleValueError(
+                f"lifecycle is a closed enum {list(reg['enum'])}; got '{value}'. "
+                f"Put the story in `status`.")
+    addition = _gate_predicate(conn, subject, predicate, new_predicate, source_ref, now, reg)
+    lc_closed = None
+    if predicate != reg['lifecycle'] and is_operational(predicate, reg):
+        lc = _open_lifecycle(conn, subject, reg)
+        if lc is not None and lc['value'] in reg['closing']:
+            lc_closed = lc
+        if lc_closed is not None and valid_from >= lc['valid_from']:
+            raise LifecycleClosedError(
+                f"{subject} is {lc['value']} since {lc['valid_from'][:10]}; '{predicate}' is an "
+                f"operational fact and would contradict it. If the subject is back in service, "
+                f"ingest `{subject} lifecycle active` first.")
+    if addition is not None:
+        conn.execute('INSERT INTO state_predicate_additions '
+                     '(predicate, first_subject, why, agent, source_ref, added_at) '
+                     'VALUES (?,?,?,?,?,?)', addition)
+    alias_note = {'alias_of': predicate, 'asked': asked} if asked != predicate else {}
+
     # half-life resolution: explicit arg > volatile-predicate default > NULL (stable)
     if half_life_days is None:
         half_life_days = VOLATILE_HALFLIFE.get(predicate)
@@ -252,10 +409,9 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
         print(f'[lumen_state] NOTE: value is {len(value)} chars (>280) -> render_tier=topic. '
               f'Prefer a short fact + full story as an episode.', file=sys.stderr)
 
-    cur = conn.execute(
+    open_row = conn.execute(
         'SELECT * FROM state_facts WHERE subject=? AND predicate=? AND valid_to IS NULL',
-        (subject, predicate))
-    open_row = cur.fetchone()
+        (subject, predicate)).fetchone()
 
     if open_row is not None and open_row['value'] == value:
         # EVIDENCE REFRESH (supersedes the old pure-noop): re-observing an identical
@@ -265,9 +421,8 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
         conn.execute('UPDATE state_facts SET last_confirmed_at=? WHERE id=?',
                      (now, open_row['id']))
         conn.commit()
-        if own: conn.close()
         return {'action': 'reconfirmed', 'refreshed': True, 'subject': subject,
-                'predicate': predicate, 'value': value}
+                'predicate': predicate, 'value': value, **alias_note}
 
     action = 'insert'
     fid = uuid.uuid4().hex
@@ -283,23 +438,45 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
             '''INSERT INTO state_facts
                (id, subject, predicate, value, valid_from, valid_to,
                 ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-                last_confirmed_at, episode_id, fact_class, render_tier)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                last_confirmed_at, episode_id, fact_class, render_tier, closed_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (fid, subject, predicate, value, valid_from, open_row['valid_from'],
              now, now, source_ref, confidence, half_life_days, now, episode_id,
-             _fc, _tier))
+             _fc, _tier, open_row['id']))
         conn.commit()
-        res = {'action': 'historical_insert', 'subject': subject, 'predicate': predicate,
-               'value': value, 'note': 'older-than-current; inserted as closed historical row, open row unchanged',
-               'current': open_row['value']}
-        if own: conn.close()
-        return res
+        return {'action': 'historical_insert', 'subject': subject, 'predicate': predicate,
+                'value': value, 'note': 'older-than-current; inserted as closed historical row, open row unchanged',
+                'current': open_row['value'], **alias_note}
+
+    if lc_closed is not None:
+        # wq#1700: a past operational fact for a subject that has since been
+        # decommissioned/retired. It was true then; it must not come back open.
+        # Land it closed at the lifecycle boundary (closing a legacy open row it
+        # supersedes on the way), so the write cannot recreate the contradiction.
+        if open_row is not None:
+            conn.execute(
+                'UPDATE state_facts SET valid_to=?, invalidated_at=?, closed_by=? WHERE id=?',
+                (valid_from, now, fid, open_row['id']))
+        conn.execute(
+            '''INSERT INTO state_facts
+               (id, subject, predicate, value, valid_from, valid_to,
+                ingested_at, invalidated_at, source_ref, confidence, half_life_days,
+                last_confirmed_at, episode_id, fact_class, render_tier, closed_by)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+            (fid, subject, predicate, value, valid_from, lc_closed['valid_from'],
+             now, now, source_ref, confidence, half_life_days, now, episode_id,
+             _fc, _tier, lc_closed['id']))
+        conn.commit()
+        return {'action': 'historical_insert', 'subject': subject, 'predicate': predicate,
+                'value': value, 'note': f"{subject} is {lc_closed['value']}; inserted closed at "
+                f"{lc_closed['valid_from'][:10]}", 'prior': (open_row['value'] if open_row else None),
+                **alias_note}
 
     if open_row is not None:
         # close (invalidate) the superseded fact -- do NOT delete
         conn.execute(
-            'UPDATE state_facts SET valid_to=?, invalidated_at=? WHERE id=?',
-            (valid_from, now, open_row['id']))
+            'UPDATE state_facts SET valid_to=?, invalidated_at=?, closed_by=? WHERE id=?',
+            (valid_from, now, fid, open_row['id']))
         action = 'superseded'
 
     conn.execute(
@@ -310,11 +487,55 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
            VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?)''',
         (fid, subject, predicate, value, valid_from, now, source_ref, confidence,
          half_life_days, now, episode_id, _fc, _tier))
+    closed = []
+    if predicate == reg['lifecycle'] and value in reg['closing']:
+        closed = close_operational(conn, subject, fid, valid_from, now, reg)
     conn.commit()
     res = {'action': action, 'subject': subject, 'predicate': predicate, 'value': value,
-           'prior': (open_row['value'] if open_row else None)}
-    if own: conn.close()
+           'prior': (open_row['value'] if open_row else None), **alias_note}
+    if closed:
+        res['closed'] = closed
+    if addition is not None:
+        res['new_predicate'] = addition[2]
     return res
+
+VIOLATION_CLASSES = ('open_alias_row', 'operational_under_closed_lifecycle',
+                     'lifecycle_outside_enum', 'multiple_open_rows')
+
+def check(conn=None):
+    """wq#1700 invariant scan over open rows. Returns {'violations': [...], 'ok': bool}.
+    Each violation: {'class', 'subject', 'predicate', 'id', 'detail'}."""
+    own = conn is None
+    conn = conn or _conn()
+    _migrate(conn)
+    reg = registry()
+    out = []
+    for r in conn.execute('SELECT id, subject, predicate, value FROM state_facts '
+                          'WHERE valid_to IS NULL').fetchall():
+        if r['predicate'] in reg['aliases']:
+            out.append({'class': 'open_alias_row', 'subject': r['subject'],
+                        'predicate': r['predicate'], 'id': r['id'],
+                        'detail': f"alias of {reg['aliases'][r['predicate']]}"})
+        if r['predicate'] == reg['lifecycle'] and r['value'] not in reg['enum']:
+            out.append({'class': 'lifecycle_outside_enum', 'subject': r['subject'],
+                        'predicate': r['predicate'], 'id': r['id'], 'detail': r['value']})
+    for lc in conn.execute('SELECT id, subject, value FROM state_facts WHERE predicate=? '
+                           'AND valid_to IS NULL', (reg['lifecycle'],)).fetchall():
+        if lc['value'] not in reg['closing']:
+            continue
+        for r in conn.execute('SELECT id, predicate FROM state_facts WHERE subject=? '
+                              'AND valid_to IS NULL AND predicate != ?',
+                              (lc['subject'], reg['lifecycle'])).fetchall():
+            if is_operational(r['predicate'], reg):
+                out.append({'class': 'operational_under_closed_lifecycle',
+                            'subject': lc['subject'], 'predicate': r['predicate'],
+                            'id': r['id'], 'detail': f"lifecycle={lc['value']}"})
+    for r in conn.execute('SELECT subject, predicate, COUNT(*) n FROM state_facts '
+                          'WHERE valid_to IS NULL GROUP BY 1,2 HAVING n > 1').fetchall():
+        out.append({'class': 'multiple_open_rows', 'subject': r['subject'],
+                    'predicate': r['predicate'], 'id': None, 'detail': f"{r['n']} open"})
+    if own: conn.close()
+    return {'ok': not out, 'violations': out}
 
 def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
             now=None, conn=None):
@@ -384,6 +605,9 @@ def _main():
     pi.add_argument('subject'); pi.add_argument('predicate'); pi.add_argument('value')
     pi.add_argument('--valid-from', default=None); pi.add_argument('--source', default=None)
     pi.add_argument('--confidence', type=float, default=1.0); pi.add_argument('--half-life', type=float, default=None)
+    pi.add_argument('--new-predicate', default=None, metavar='WHY',
+                    help='wq#1700: reason for introducing a predicate state_facts has never seen')
+    sub.add_parser('check')
     pc = sub.add_parser('current'); pc.add_argument('subject', nargs='?'); pc.add_argument('predicate', nargs='?')
     pc.add_argument('--limit', type=int, default=None); pc.add_argument('--min-confidence', type=float, default=0.0)
     pa = sub.add_parser('asof'); pa.add_argument('when'); pa.add_argument('subject', nargs='?'); pa.add_argument('predicate', nargs='?')
@@ -393,8 +617,20 @@ def _main():
     if a.cmd == 'init':
         init_schema(); print('schema ready'); return
     if a.cmd == 'ingest':
-        print(ingest(a.subject, a.predicate, a.value, valid_from=a.valid_from, source_ref=a.source,
-                     confidence=a.confidence, half_life_days=a.half_life)); return
+        try:
+            print(ingest(a.subject, a.predicate, a.value, valid_from=a.valid_from, source_ref=a.source,
+                         confidence=a.confidence, half_life_days=a.half_life,
+                         new_predicate=a.new_predicate))
+        except StateGateError as e:
+            print(f'REFUSED ({type(e).__name__}): {e}', file=sys.stderr)
+            sys.exit(2)
+        return
+    if a.cmd == 'check':
+        res = check()
+        for v in res['violations']:
+            print(f"VIOLATION {v['class']}: {v['subject']}.{v['predicate']}  {v['detail']}  [{v['id']}]")
+        print(f"check: {'OK' if res['ok'] else 'FAIL'} ({len(res['violations'])} violation(s))")
+        sys.exit(0 if res['ok'] else 1)
     if a.cmd == 'current':
         for r in current(a.subject, a.predicate, limit=a.limit, min_confidence=a.min_confidence):
             line = f"{r['subject']:>10}.{r['predicate']:<14} = {r['value']}  (since {r['valid_from'][:10]})"

@@ -144,7 +144,7 @@ def test_current_annotates_rows_and_survives_a_pre_migration_schema(db):
     """state_facts has no verify_recipe/contradicted_at column yet; current()
     must select only the columns that exist and still annotate every row."""
     ls.ingest('thor', 'lan_ip', '10.0.0.1')
-    ls.ingest('thor', 'note', 'x' * 600)
+    ls.ingest('thor', 'note', 'x' * 600, new_predicate='fixture: narrative-class row')
     backdate(400)
     rows = {r['predicate']: r for r in ls.current(now=NOW)}
     assert rows['lan_ip']['staleness'] == ls.STALE

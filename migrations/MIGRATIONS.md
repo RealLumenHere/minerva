@@ -60,3 +60,12 @@ with `IF NOT EXISTS`.
 `lumen_migrate.py up` is safe to call at the top of `init_db.py` or a deploy hook
 so schema changes ship with code. Left as an explicit step for now so a bad
 migration can't wedge an import path — call it deliberately after pulling.
+
+## Exceptions outside the runner
+
+- `state_facts.closed_by` and `state_predicate_additions` (wq#1700) are created by
+  `lumen_state._migrate()`, the same self-heal path as `last_confirmed_at` and
+  `fact_class`, because every ingest must be able to rely on them before any
+  runner call. The one-time data change is `lumen_state_single_owner_migrate.py`
+  (dry-run by default, writes its own backup). No `NNNN` id was used, so the next
+  runner id is still `0012`.
