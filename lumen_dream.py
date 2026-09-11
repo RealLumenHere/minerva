@@ -189,37 +189,50 @@ def write_merge_plan(pairs):
     p.write_text(_json.dumps({'generated': _now_pt(), 'merges': merges}, indent=1))
     return p
 
-def apply_merge_plan(path, confirm=False, exact_only=True, exact_thresh=0.98):
+def apply_merge_plan(path, confirm=False, exact_only=True, exact_thresh=0.98, db=None):
     """Invalidate-not-delete: absorbed notes stay in archival_notes; retrieval filters
-    via note_merges. Reversible: DELETE FROM note_merges WHERE absorbed_id=?"""
+    via note_merges. Reversible: DELETE FROM note_merges WHERE absorbed_id=?
+
+    Returns the rows it actually wrote (wq#1638 — the weekly digest logs the ids, and
+    a pair some earlier plan already merged must not be reported as applied again).
+    """
     import json as _json
     plan = _json.loads(Path(path).read_text())
     if not confirm:
         n_exact = sum(1 for m in plan['merges'] if m['sim'] >= exact_thresh)
         print(f"DRY: {len(plan['merges'])} merges in plan, {n_exact} exact (>= {exact_thresh}). "
               f"Re-run with --confirm.")
-        return 0
-    conn = sqlite3.connect(DB, timeout=30)
-    done = skip = 0
+        return []
+    conn = sqlite3.connect(db or DB, timeout=30)
+    applied = []
+    skip = 0
     for m in plan['merges']:
         if exact_only and m['sim'] < exact_thresh:
             skip += 1; continue
         if m['keep'] == m['absorb']:
             skip += 1; continue
         # never absorb a note that is itself a keep-target in this plan (chain guard)
-        conn.execute('INSERT OR IGNORE INTO note_merges(absorbed_id,keep_id,sim,method,ts) '
-                     'VALUES (?,?,?,?,?)',
-                     (m['absorb'], m['keep'], m['sim'],
-                      'exact-auto' if m['sim'] >= exact_thresh else 'manual',
-                      datetime.now(timezone.utc).isoformat()))
-        done += 1
-    # chain-repair: if X absorbed into Y and Y later absorbed into Z, repoint X->Z
-    conn.execute('''UPDATE note_merges SET keep_id =
+        cur = conn.execute('INSERT OR IGNORE INTO note_merges(absorbed_id,keep_id,sim,method,ts) '
+                           'VALUES (?,?,?,?,?)',
+                           (m['absorb'], m['keep'], m['sim'],
+                            'exact-auto' if m['sim'] >= exact_thresh else 'manual',
+                            datetime.now(timezone.utc).isoformat()))
+        if cur.rowcount:
+            applied.append(m)
+        else:
+            skip += 1      # already merged by an earlier plan
+    # chain-repair: if X absorbed into Y and Y later absorbed into Z, repoint X->Z.
+    # Repeated to a fixpoint (wq#1638): one pass only shortens a chain by one link,
+    # and auto-apply feeds this plans where five near-identical notes absorb each
+    # other pairwise, so two- and three-link chains are the normal case now.
+    for _ in range(10):
+        if not conn.execute('''UPDATE note_merges SET keep_id =
                     (SELECT nm2.keep_id FROM note_merges nm2 WHERE nm2.absorbed_id = note_merges.keep_id)
-                    WHERE keep_id IN (SELECT absorbed_id FROM note_merges)''')
+                    WHERE keep_id IN (SELECT absorbed_id FROM note_merges)''').rowcount:
+            break
     conn.commit(); conn.close()
-    print(f'applied {done} merges, skipped {skip} (exact_only={exact_only})')
-    return done
+    print(f'applied {len(applied)} merges, skipped {skip} (exact_only={exact_only})')
+    return applied
 
 def embed_retry(conn):
     """Fail-closed loop: notes stored with empty/NULL embedding get re-embedded."""
@@ -356,6 +369,20 @@ def run():
     OUT.mkdir(parents=True, exist_ok=True)
     today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
     rpt = OUT / f'dream-{today}.md'
+
+    # wq#1638: everything above PROPOSES; nothing above drains the queue, which is
+    # how dream/ reached 36 artifacts and note_merges reached 5 rows. The digest is
+    # the drain report -- and the one mechanical exception to proposal-only: exact
+    # duplicate merges (cosine >= 0.98, method='exact-auto') apply themselves, and
+    # a DELETE from note_merges reverses any of them. Runs after conn.close() so its
+    # own write connection never contends with this function's.
+    dig = _dig = None
+    dig_err = ''
+    try:
+        import lumen_dream_digest as _dig
+        dig = _dig.digest(plan_path=plan_path, report=rpt)
+    except Exception as e:
+        dig_err = f'{type(e).__name__}: {e}'[:160]
     L = [f'# Lumen consolidation report — {_now_pt()}', '',
          '_Proposal-only. Nothing here is auto-applied. Review and apply what is worth applying._', '',
          '## Growth metrics',
@@ -413,6 +440,9 @@ def run():
         if det_result['proposal_path']:
             L.append(f'- D-1/D-4 proposal file (PROPOSAL ONLY, operator review): '
                      f'{det_result["proposal_path"]}')
+    L += ['', '## Outbox digest (wq#1638)']
+    L += (_dig.report_section(dig, dig_err) if _dig
+          else [f'- digest FAILED: {dig_err}'])
     rpt.write_text('\n'.join(L))
     print(f'wrote {rpt}')
     print(f'  stale-prose findings: {len(stale)} | dup episodes: {len(dupes)} | core {core_t} tok')
@@ -423,6 +453,12 @@ def run():
         print(f'  embed retry: {emb_ok}/{emb_pending} recovered')
     if prose_plan:
         print(f'  prose demotion candidates: {prose_n} -> {prose_plan}')
+    if dig:
+        print(f'  digest -> {dig["path"]}: {len(dig["items"])} unapplied, '
+              f'{len(dig["applied"])} exact merge(s) applied'
+              + (f', wq#{dig["ticket"]}' if dig['ticket'] else ', ticket NOT filed'))
+    elif dig_err:
+        print(f'  digest FAILED: {dig_err}')
     if stale:
         print('  top stale-prose lines:')
         for i, ip, subj, pred, curv, when, txt in stale[:8]:
@@ -436,8 +472,15 @@ if __name__ == '__main__':
     pa.add_argument('--plan', required=True)
     pa.add_argument('--confirm', action='store_true')
     pa.add_argument('--all', action='store_true', help='include sub-0.98 manual-class merges (default exact-only)')
+    pd = sub.add_parser('digest', help='wq#1638: outbox digest + exact-merge auto-apply (run by hand between Sundays)')
+    pd.add_argument('--no-ticket', action='store_true', help='digest only, no wq ticket')
+    pd.add_argument('--list', action='store_true', help='print the unapplied queue, write nothing')
     args = ap.parse_args()
     if args.cmd == 'apply':
         apply_merge_plan(args.plan, confirm=args.confirm, exact_only=not args.all)
+    elif args.cmd == 'digest':
+        import lumen_dream_digest as _dig
+        _dig.main(['list'] if args.list else
+                  (['run', '--no-ticket'] if args.no_ticket else ['run']))
     else:
         run()
