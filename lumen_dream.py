@@ -384,7 +384,9 @@ def run():
     except Exception as e:
         dig_err = f'{type(e).__name__}: {e}'[:160]
     L = [f'# Lumen consolidation report — {_now_pt()}', '',
-         '_Proposal-only. Nothing here is auto-applied. Review and apply what is worth applying._', '',
+         '_Proposal-only, with one exception (wq#1638): exact-duplicate episodic merges '
+         '(cosine >= 0.98) apply themselves and are logged under Outbox digest below. '
+         'Everything else here is a proposal — review and apply what is worth applying._', '',
          '## Growth metrics',
          f'- claude_memory.md: {lines} lines, {secs} sections, core floor {core_t} tok'
          + ('  ⚠️ core>8K' if core_t > 8000 else ''),

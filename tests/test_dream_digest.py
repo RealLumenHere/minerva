@@ -358,10 +358,17 @@ def test_the_ticket_is_user_lane_week_stamped_and_liveness_tagged(dream, db, fak
     assert 'lumen_dream.py apply --plan' in detail
 
 
-def test_an_empty_outbox_opens_no_ticket_at_all(dream, db, fake_wq, queue_db):
-    assert dd.open_ticket([], [], '/x/d.md', '/x/s.json', now=NOW,
-                          wq_bin=str(fake_wq), queue_db=queue_db) == (None, [])
-    assert not fake_wq.log.exists()
+def test_a_drained_outbox_opens_no_ticket_and_closes_last_weeks(dream, db, fake_wq, queue_db):
+    tid, closed = dd.open_ticket([], [], '/x/d.md', '/x/s.json', now=NOW,
+                                 wq_bin=str(fake_wq), queue_db=queue_db)
+    assert (tid, closed) == (None, [1700])
+    call, = fake_wq.calls
+    assert call[:2] == ['done', '1700'] and 'drained' in call[3]
+
+
+def test_a_bare_invocation_writes_nothing(capsys):
+    assert dd.main([]) == 2
+    assert 'usage' in capsys.readouterr().out
 
 
 def test_a_refused_wq_add_leaves_last_weeks_ticket_open(dream, db, tmp_path, queue_db):

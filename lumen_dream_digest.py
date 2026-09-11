@@ -371,8 +371,12 @@ def open_ticket(items, applied, digest_path, status_path, now=None,
     has the backlog in front of him."""
     now = now or _now()
     h = headline(items, applied)
-    if not items and not applied:
-        return None, []
+    if not items:
+        # Nothing left to ask for. Close last week's ticket here rather than leaving it
+        # to the liveness sweep: the ask is satisfied, and an open ticket for a drained
+        # queue is how the user lane became a graveyard in the first place.
+        return None, _close_previous(None, digest_path, wq_bin, queue_db,
+                                     why='the dream outbox is drained')
     title = (f'{TICKET_MARK} {_iso_week(now)}] {h["pending_plans"]} unapplied memory '
              f'proposal(s), oldest {h["oldest_days"]}d')
     lines = [
@@ -399,19 +403,26 @@ def open_ticket(items, applied, digest_path, status_path, now=None,
         return None, []
     m = re.search(r'added task (\d+)', out.stdout or '')
     tid = m.group(1) if m else None
-    superseded = []
+    return tid, _close_previous(tid, digest_path, wq_bin, queue_db)
+
+
+def _close_previous(tid, digest_path, wq_bin, queue_db, why=None):
+    """Close every earlier open digest ticket. The digest path is the artifact `wq done`
+    demands, so no --no-artifact escape is needed."""
+    note = (f'superseded by wq#{tid} (this week\'s dream outbox digest)' if tid
+            else f'closed by the weekly dream digest: {why}')
+    closed = []
     for old_id, _title in previous_tickets(queue_db):
         if str(old_id) == str(tid):
             continue
-        r = _wq(['done', str(old_id), '--notes',
-                 f'superseded by wq#{tid} (this week\'s dream outbox digest). '
-                 f'Current digest: {digest_path}'], wq_bin)
+        r = _wq(['done', str(old_id), '--notes', f'{note}. Current digest: {digest_path}'],
+                wq_bin)
         if r is not None and r.returncode == 0:
-            superseded.append(old_id)
+            closed.append(old_id)
         else:
-            why = (r.stderr or r.stdout).strip()[:160] if r else 'wq unavailable'
-            print(f'# wq#{old_id} not superseded: {why}', file=sys.stderr)
-    return tid, superseded
+            reason = (r.stderr or r.stdout).strip()[:160] if r else 'wq unavailable'
+            print(f'# wq#{old_id} not closed: {reason}', file=sys.stderr)
+    return closed
 
 
 def digest(plan_path=None, plan_dir=None, db=None, now=None, report=None,
@@ -466,6 +477,10 @@ def main(argv=None):
     sub.add_parser('list', help='print the unapplied queue (no writes at all)')
     sub.add_parser('briefing', help='the lumen-briefing section (what the daily run prints)')
     args = ap.parse_args(argv)
+    if args.cmd is None:
+        # bare invocation must not apply merges and file a ticket by surprise
+        ap.print_help()
+        return 2
     if args.cmd == 'briefing':
         print(briefing_section())
         return 0
