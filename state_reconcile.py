@@ -20,7 +20,7 @@ Usage:
   state_reconcile.py            # apply
 """
 import sys, json, subprocess, sqlite3
-from lumen_state import ingest, current
+from lumen_state import ingest, current, report_observation
 from lumen_coverage import Coverage
 
 # lowercased tailscale HostName -> store subject (for names that don't map directly)
@@ -60,7 +60,7 @@ def main():
     cur = {(r['subject'], r['predicate']): r['value'] for r in current(predicate='tailscale_ip')}
     changes, flags = [], []
     # wq#1611: "no drift" and "nothing checked" must not print the same line.
-    cov, seen = Coverage('state_reconcile:tailscale_ip'), set()
+    cov, seen, conflicts = Coverage('state_reconcile:tailscale_ip'), set(), []
     for host, ip, online in ts_status():
         if not ip:
             continue
@@ -76,16 +76,32 @@ def main():
         if old is None:
             cov.count('unverifiable', 'no-fact')   # on the wire, absent from the store
             continue
-        if old == ip:
-            cov.count('matched')
+        if dry:
+            # --dry-run is a read-only preview of what report_observation()
+            # would decide below; it must never write, so it stays a compare.
+            if old == ip:
+                cov.count('matched')
+            else:
+                cov.count('drifted')
+                changes.append((subj, old, ip))
             continue
-        cov.count('drifted')
-        changes.append((subj, old, ip))
-        if not dry:
-            # wq#1634: source_kind='observed' -- this value came off the wire, so
-            # wq#1613's verifier is free to supersede it on a probe mismatch.
-            ingest(subj, 'tailscale_ip', ip, source_ref='reconcile:tailscale',
-                   source_kind='observed')
+        # wq#1608: NEVER compare-and-skip here. Report the wire observation
+        # and let ingest() (via report_observation) decide confirmed /
+        # superseded / unknown -- a match is still evidence and must bump
+        # last_confirmed_at, not be silently discarded (the class defect this
+        # ticket exists to kill). source_kind='observed' on a genuine
+        # supersession; a fact Frank stated is never auto-overwritten (§3.4).
+        res = report_observation(subj, 'tailscale_ip', ip, 'tailscale_ip',
+                                 source_ref='reconcile:tailscale')
+        if res['outcome'] == 'confirmed':
+            cov.count('matched')
+        elif res['outcome'] == 'superseded':
+            cov.count('drifted')
+            changes.append((subj, old, ip))
+        else:
+            cov.count('unverifiable', f"verify-{res['outcome']}")
+            if res.get('conflict'):
+                conflicts.append((subj, res.get('stored'), ip))
     for subj, _pred in cur:
         if subj not in seen:
             cov.count('unverifiable', 'not-seen')  # in the store, never offered by the wire
@@ -105,6 +121,10 @@ def main():
         print('UNKNOWN online peers (review; not auto-ingested):')
         for host, ip in flags:
             print(f'  {host} {ip}')
+    if conflicts:
+        print('FRANK-STATED CONFLICTS (never auto-superseded; reconcile by hand):')
+        for subj, stored, ip in conflicts:
+            print(f'  {subj}: store={stored} wire={ip}')
     if changes and not dry:
         # refresh the rendered live block
         subprocess.run(['/home/lumen/bin/state-regen'], capture_output=True)

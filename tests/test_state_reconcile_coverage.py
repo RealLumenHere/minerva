@@ -85,3 +85,59 @@ def test_unknown_peers_are_flagged_not_counted_as_coverage(wire, capsys):
     out = _run(capsys)
     assert "checked 1 · matched 1 · drifted 0 · unverifiable 0" in out
     assert "sekhmet 100.64.0.7" in out
+
+
+# ── wq#1608: the live (non-dry-run) path must never compare-and-skip ────────
+
+@pytest.fixture
+def live_wire(monkeypatch):
+    """Same as `wire`, but drives the real (non-dry-run) path and records
+    report_observation() calls instead of stubbing ingest() -- this is the
+    path the old code silently skipped on a match."""
+    calls = []
+
+    def fake_report_observation(subject, predicate, observed, probe, **kw):
+        calls.append((subject, predicate, observed, probe))
+        return {'outcome': 'confirmed', 'subject': subject, 'predicate': predicate}
+
+    monkeypatch.setattr(sr, "report_observation", fake_report_observation)
+    monkeypatch.setattr(sys, "argv", ["state_reconcile.py"])  # no --dry-run
+
+    def setup(peers, facts, known=("hub", "leaf")):
+        monkeypatch.setattr(sr, "known_subjects", lambda: set(known))
+        monkeypatch.setattr(sr, "ts_status", lambda: peers)
+        monkeypatch.setattr(sr, "current", lambda **kw: [
+            {"subject": s, "predicate": "tailscale_ip", "value": v} for s, v in facts.items()])
+    return setup, calls
+
+
+def test_a_match_still_reports_the_observation_when_not_dry_run(live_wire, capsys):
+    """The wq#1608 bug, pinned: a wire value equal to the stored value must
+    still be reported (so ingest() can bump last_confirmed_at) instead of
+    being discarded with a bare `continue`."""
+    setup, calls = live_wire
+    setup([("hub", "100.64.0.1", True), ("leaf", "100.64.0.3", True)],
+          {"hub": "100.64.0.1", "leaf": "100.64.0.3"})
+    sr.main()
+    assert ("hub", "tailscale_ip", "100.64.0.1", "tailscale_ip") in calls
+    assert ("leaf", "tailscale_ip", "100.64.0.3", "tailscale_ip") in calls
+
+
+def test_a_drift_is_also_reported_not_compared_locally(live_wire, capsys):
+    setup, calls = live_wire
+    setup([("hub", "100.64.0.9", True)], {"hub": "100.64.0.1"})
+    sr.main()
+    assert ("hub", "tailscale_ip", "100.64.0.9", "tailscale_ip") in calls
+
+
+def test_frank_stated_conflict_is_surfaced_not_silently_applied(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["state_reconcile.py"])
+    monkeypatch.setattr(sr, "known_subjects", lambda: {"hub"})
+    monkeypatch.setattr(sr, "ts_status", lambda: [("hub", "100.64.0.9", True)])
+    monkeypatch.setattr(sr, "current", lambda **kw: [
+        {"subject": "hub", "predicate": "tailscale_ip", "value": "100.64.0.1"}])
+    monkeypatch.setattr(sr, "report_observation", lambda *a, **k: {
+        'outcome': 'unknown', 'conflict': True, 'stored': '100.64.0.1'})
+    out = _run(capsys)
+    assert "FRANK-STATED CONFLICTS" in out
+    assert "hub: store=100.64.0.1 wire=100.64.0.9" in out
