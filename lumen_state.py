@@ -32,6 +32,13 @@ the store has never seen unless the writer gives a reason (new_predicate), and
 treats `lifecycle` as a closed enum whose decommissioned/retired values close the
 subject's operational facts and refuse later operational writes.
 
+VALUE IS A TOKEN, PROSE IS A NOTE (wq#1629): `value` holds the machine-checkable
+token and `note` holds the sentence around it. Callers may split it themselves
+(`--note`), otherwise state_value_split.split_value() does it at ingest from a
+deterministic rule set. Storing the whole sentence in `value` is what put 184 of
+316 closed facts out of reach of every token scanner; `--note` and the splitter
+are how the value column stays readable to one.
+
 AUDITED WRITE PATH (wq#1634, MINERVA_PIPELINE_MAP.md §4.5): every accepted ingest
 appends a `memory_audit` row (table_name='state_facts', action=write|supersede|
 reconfirm, agent_id=$WQ_AGENT, lane read from the ticket in source_ref) INSIDE the
@@ -42,6 +49,9 @@ import sqlite3, sys, uuid, argparse, os, json, fnmatch, difflib
 from datetime import datetime, timezone
 
 import minerva_audit
+import projection_state
+import state_value_split
+import prefs_block
 
 DB = '/home/lumen/minerva/minerva.db'
 REGISTRY_PATH = os.environ.get(
@@ -59,6 +69,14 @@ class LifecycleValueError(StateGateError):
 
 class LifecycleClosedError(StateGateError):
     pass
+
+class PredicateNearDuplicate(StateGateError):
+    """wq#1689: a brand-new predicate that is within edit-distance 2 of a
+    predicate this same subject already carries. This is the supersession hole
+    (thoth.ssh_status vs thoth.tailscale_ssh, gameboy.tailscale_ip vs ts_ip):
+    a renamed/reformatted predicate never invalidates the old one because the
+    two names don't match, so both stay open forever. A real rename should use
+    the existing owner predicate (or a state_registry.json alias), not a new one."""
 
 _REGISTRY = {}
 
@@ -79,8 +97,20 @@ def registry(path=None):
             'core': set(doc.get('core_predicates', ())),
             'operational': set(doc.get('operational_predicates', ())),
             'op_patterns': tuple(doc.get('operational_patterns', ())),
+            # wq#1689: registry-level override/extension of the VOLATILE_HALFLIFE
+            # module default, so the volatile-predicate list is configurable
+            # without a code change. Registry wins on conflict.
+            'volatile_halflife': dict(doc.get('volatile_halflife', {})),
         }
     return _REGISTRY[path]
+
+def volatile_halflife_days(predicate, reg=None):
+    """Default half-life for `predicate`, registry override first, else the
+    VOLATILE_HALFLIFE module default. None => not volatile (never decays)."""
+    reg = reg or registry()
+    if predicate in reg['volatile_halflife']:
+        return reg['volatile_halflife'][predicate]
+    return VOLATILE_HALFLIFE.get(predicate)
 
 def is_operational(predicate, reg=None):
     reg = reg or registry()
@@ -102,9 +132,19 @@ def _conn():
 # ── Change 3: confidence-decay support (2026-07-08) ──────────────────────────
 # Predicate -> default half-life (days). Predicates NOT listed => NULL => never
 # decay (stable facts: IPs, MACs, hostnames, status=retired stay authoritative).
+#
+# wq#1689: kernel/status/availability/root_disk/uptime/ssh_status are one-moment
+# PROBE OBSERVATIONS, not permanent truth -- thoth.status carried a 09-02 outage
+# as present tense for 8 days after the box came back (INVENTORY_RECONCILIATION.md
+# #6/#12, wq#1666). Giving them a half-life makes effective_confidence() decay them
+# and (via evidence_age_days's last_confirmed_at/valid_from anchor feeding
+# staleness()) makes `current` render them DUE once stale, so drift-assert /
+# fleet-inv verify re-reads them instead of trusting a snapshot indefinitely.
 VOLATILE_HALFLIFE = {
     'price': 30, 'deal_quality': 30, 'market_price': 30, 'cost': 30,
     'listing': 7, 'auction_state': 3, 'auction_end': 3, 'stock': 7,
+    'kernel': 14, 'status': 7, 'availability': 7, 'root_disk': 14,
+    'uptime': 7, 'ssh_status': 7,
 }
 
 # ── Memory V3 P1: fact classification (write-time) ──────────────────────────
@@ -115,10 +155,16 @@ IDENTITY_PREDS = {'hardware', 'role', 'status', 'lan_ip', 'tailscale_ip',
 _STATUSISH = _re.compile(r'(status|state|result|assessment|next_steps|blocker|'
                          r'calibration|recovery|attempt|incident)')
 
-def _classify_fact(predicate, value):
+def _classify_fact(predicate, value, note=None):
     """Return (fact_class, render_tier). Mirrors the 0003 backfill heuristic:
     core = short identity facts (<=280) or any short fact (<=140); everything
-    else is topic (on-demand via `current <subject>` / FULL render)."""
+    else is topic (on-demand via `current <subject>` / FULL render).
+
+    wq#1629: the class describes the value (a token is never narrative), but the
+    tier is a rendering budget, so it measures what actually renders — the value
+    AND its note. Without that, splitting the prose out of a topic-tier fact
+    would promote it into the injected core block and blow STATE_SOFT_CAP_TOK
+    while rendering the same number of characters."""
     vlen = len(value)
     if vlen > 500:
         fc = 'narrative'
@@ -130,7 +176,8 @@ def _classify_fact(predicate, value):
         fc = 'config'
     # thresholds tuned 2026-08-07 against live corpus: identity<=240 / other<=120
     # renders ~3.8K tok (soft cap 4K) with growth headroom. See eval sweep in P1 episode.
-    tier = 'core' if ((predicate in IDENTITY_PREDS and vlen <= 240) or vlen <= 120) else 'topic'
+    rlen = vlen if not note else len(display_value({'value': value, 'note': note}))
+    tier = 'core' if ((predicate in IDENTITY_PREDS and rlen <= 240) or rlen <= 120) else 'topic'
     return fc, tier
 
 def _cols(conn):
@@ -174,7 +221,38 @@ def _migrate(conn):
     if 'source_kind' not in cols:
         conn.execute("ALTER TABLE state_facts ADD COLUMN source_kind TEXT")
         conn.commit()
+    # wq#1629: the prose that used to share the value column. `value` holds a
+    # machine-checkable token; `note` holds the sentence around it, so a token
+    # scanner can read the value and a human still gets the story.
+    if 'note' not in cols:
+        conn.execute("ALTER TABLE state_facts ADD COLUMN note TEXT")
+        conn.commit()
     minerva_audit.ensure_table(conn)
+
+def _migrate_verify(conn):
+    """wq#1608 / wq#1613: verification-evidence columns + audit table, added
+    ONLY on the probe-reporting path (ingest(probe=...), report_observation()).
+    Deliberately NOT folded into _migrate() above: test_lumen_state_staleness
+    exercises a genuine pre-wq#1613 schema (no verify_recipe/contradicted_at
+    column at all) via plain ingest() calls to prove current()'s staleness
+    fallback still works before that migration has ever run anywhere. Keeping
+    these columns off the unconditional path preserves that scenario for
+    every existing (non-probe) caller; a probe-identified caller is exactly
+    the thing that needs them, so it pays the one-time ALTER cost lazily."""
+    cols = _cols(conn)
+    if not cols:
+        return
+    for col, coltype in (('verify_recipe', 'TEXT'), ('verify_interval_days', 'REAL'),
+                         ('contradicted_at', 'TEXT'), ('derived_from', 'TEXT')):
+        if col not in cols:
+            conn.execute(f"ALTER TABLE state_facts ADD COLUMN {col} {coltype}")
+            conn.commit()
+    conn.execute('''CREATE TABLE IF NOT EXISTS fact_verifications (
+        id TEXT PRIMARY KEY, fact_id TEXT NOT NULL, subject TEXT, predicate TEXT,
+        probe TEXT NOT NULL, observed TEXT, outcome TEXT NOT NULL,
+        ts TEXT NOT NULL, detail TEXT)''')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_fv_fact ON fact_verifications(fact_id, ts)')
+    conn.commit()
 
 def _age_days(valid_from, now=None):
     now = now or datetime.now(timezone.utc)
@@ -277,7 +355,16 @@ def annotate(row, now=None):
     row['staleness'] = cls
     row['evidence_age_days'] = age
     row['evidence'] = _evidence_label(cls, age, row)
+    # wq#1629: `value` is the token a scanner reads; `value_display` is the token
+    # plus the prose a human reads. Renderers use value_display so splitting a
+    # fact does not delete the sentence from LIVE_FLEET_STATE.
+    row['value_display'] = display_value(row)
     return row
+
+def display_value(row):
+    """Token + its note, as one human-readable string."""
+    note = (row.get('note') or '').strip()
+    return f"{row['value']} — {note}" if note else row['value']
 
 def init_schema(conn=None):
     own = conn is None
@@ -311,6 +398,35 @@ def init_schema(conn=None):
     _migrate(conn)
     if own: conn.close()
 
+def _edit_distance(a, b):
+    """Plain Levenshtein distance. Predicate names are short (<40 chars), so the
+    O(len(a)*len(b)) DP table is trivial cost per ingest call."""
+    if a == b:
+        return 0
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i] + [0] * len(b)
+        for j, cb in enumerate(b, 1):
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1,
+                        prev[j - 1] + (ca != cb))
+        prev = cur
+    return prev[-1]
+
+def _near_duplicate_predicate(conn, subject, predicate, max_distance=2):
+    """The nearest predicate this subject already carries within edit-distance
+    `max_distance`, or None. wq#1689: catches a renamed/reformatted predicate
+    (lan_ip vs lan-ip, hw vs hardware-ish typos) before it becomes a second,
+    never-invalidated 'current' fact for the same subject."""
+    existing = {r[0] for r in conn.execute(
+        'SELECT DISTINCT predicate FROM state_facts WHERE subject=?', (subject,))}
+    existing.discard(predicate)
+    best, best_dist = None, max_distance + 1
+    for cand in existing:
+        d = _edit_distance(predicate, cand)
+        if d <= max_distance and d < best_dist:
+            best, best_dist = cand, d
+    return best
+
 def _gate_predicate(conn, subject, predicate, new_predicate, source_ref, now, reg):
     """wq#1700 predicate gate. Accepts: open-namespace subject, registry predicate,
     a predicate the store already has rows for, or a recorded addition. A new
@@ -327,6 +443,18 @@ def _gate_predicate(conn, subject, predicate, new_predicate, source_ref, now, re
     if conn.execute('SELECT 1 FROM state_predicate_additions WHERE predicate=?',
                     (predicate,)).fetchone():
         return None
+    # wq#1689: this predicate is new to the WHOLE store (every check above this
+    # point missed it). Before accepting it -- even with a --new-predicate
+    # reason -- refuse if it's a near-miss rename of a predicate THIS subject
+    # already carries, so a renamed/reformatted predicate can't silently open a
+    # second, never-invalidated fact next to the one it was meant to replace.
+    dupe = _near_duplicate_predicate(conn, subject, predicate)
+    if dupe is not None:
+        raise PredicateNearDuplicate(
+            f"predicate '{predicate}' is new, but '{subject}' already has "
+            f"'{dupe}' (edit-distance <=2). This looks like a rename/reformat, "
+            f"not a new axis -- write to '{dupe}' instead, or add an explicit "
+            f"alias in state_registry.json if the rename is real.")
     if new_predicate and str(new_predicate).strip():
         return (predicate, subject, str(new_predicate).strip(),
                 os.environ.get('WQ_AGENT'), source_ref, now)
@@ -368,20 +496,45 @@ def close_operational(conn, subject, lifecycle_id, lifecycle_valid_from, now, re
         closed.append(r['predicate'])
     return sorted(closed)
 
+def _record_verification(conn, fact_id, subject, predicate, probe, observed,
+                          outcome, ts, detail=None):
+    """wq#1608: append-only row so 'checked and matched' / 'checked and
+    changed' / 'never checked' are always distinguishable (§2.3). Shared by
+    ingest()'s probe path and report_observation()."""
+    conn.execute(
+        'INSERT INTO fact_verifications '
+        '(id, fact_id, subject, predicate, probe, observed, outcome, ts, detail) '
+        'VALUES (?,?,?,?,?,?,?,?,?)',
+        (uuid.uuid4().hex, fact_id, subject, predicate, probe, observed, outcome,
+         ts, detail))
+
 def ingest(subject, predicate, value, valid_from=None, source_ref=None,
            confidence=1.0, half_life_days=None, episode_id=None, conn=None,
-           new_predicate=None, stated_by_frank=False, source_kind=None):
+           new_predicate=None, stated_by_frank=False, source_kind=None,
+           note=None, probe=None):
     """Deterministic key-based supersession behind the wq#1700 gate.
     Returns dict describing the action; raises StateGateError (nothing written).
 
     wq#1634: every accepted write also appends a memory_audit row in the same
-    transaction, and stamps source_kind on the fact it writes."""
+    transaction, and stamps source_kind on the fact it writes.
+    wq#1629: pass `note` to split the prose out of the value yourself; leave it
+    None and a prose value is split by rule at ingest.
+    wq#1608: pass `probe` (a verify/registry.yaml probe id) when this call
+    reports a reconciler's re-observation of a fact, rather than a fresh
+    write. It has two effects, both additive and opt-in (default None ->
+    zero behavioural change for the hundreds of existing non-probe callers):
+    on reconfirm it appends a `fact_verifications` row; on genuine
+    supersession it appends one too, so 'checked and matched' / 'checked and
+    changed' / 'never checked' are always distinguishable (§2.3 of
+    MINERVA_STALENESS_REVIEW.md). contradicted_at is cleared on reconfirm
+    unconditionally (a matching re-observation resolves a contradiction
+    whether or not the caller identifies as a probe)."""
     own = conn is None
     conn = conn or _conn()
     try:
         return _ingest(conn, subject, predicate, value, valid_from, source_ref,
                        confidence, half_life_days, episode_id, new_predicate,
-                       stated_by_frank, source_kind)
+                       stated_by_frank, source_kind, note, probe)
     except Exception:
         if own: conn.rollback()
         raise
@@ -390,8 +543,14 @@ def ingest(subject, predicate, value, valid_from=None, source_ref=None,
 
 def _ingest(conn, subject, predicate, value, valid_from, source_ref,
             confidence, half_life_days, episode_id, new_predicate,
-            stated_by_frank=False, source_kind=None):
+            stated_by_frank=False, source_kind=None, note=None, probe=None):
     _migrate(conn)
+    # wq#1633: every accepted write below commits before returning, so marking
+    # the state-derived projections dirty here lands in the SAME transaction as
+    # whichever exit path fires (reconfirm / historical_insert / insert / supersede).
+    # projection_state.ensure_schema() is idempotent, so this is a no-op cost on a
+    # DB that hasn't been migrated for wq#1633 yet beyond one extra CREATE-IF-NOT-EXISTS.
+    projection_state.mark_state_projections_dirty(conn)
     reg = registry()
     now = _now()
     valid_from = valid_from or now
@@ -433,15 +592,26 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
                      'VALUES (?,?,?,?,?,?)', addition)
     alias_note = {'alias_of': predicate, 'asked': asked} if asked != predicate else {}
 
-    # half-life resolution: explicit arg > volatile-predicate default > NULL (stable)
+    # half-life resolution: explicit arg > registry override > volatile-predicate
+    # default (wq#1689) > NULL (stable)
     if half_life_days is None:
-        half_life_days = VOLATILE_HALFLIFE.get(predicate)
+        half_life_days = volatile_halflife_days(predicate, reg)
+
+    # ── wq#1629: token in `value`, prose in `note` ───────────────────────────
+    # Runs after the gate (so a refused write splits nothing) and before
+    # classification and the open-row lookup, so fact_class sees the token and
+    # supersession compares token to token instead of sentence to sentence.
+    # `lifecycle` is already a closed enum — nothing to split, and splitting it
+    # could only break the enum.
+    split_rule = None
+    if predicate != reg['lifecycle']:
+        value, note, split_rule = state_value_split.split_value(predicate, value, note)
 
     # ── Memory V3 P1: fact classification + render tier (write-time) ─────────
     # core -> injected LIVE_FLEET_STATE block; topic -> on-demand (`current <subj>`,
     # LIVE_FLEET_STATE_FULL.md). Values >280 chars get a stderr nudge: long prose
     # belongs in an episode (lumen_episode.py commit) with a short fact pointing at it.
-    _fc, _tier = _classify_fact(predicate, value)
+    _fc, _tier = _classify_fact(predicate, value, note)
     if len(value) > 280:
         print(f'[lumen_state] NOTE: value is {len(value)} chars (>280) -> render_tier=topic. '
               f'Prefer a short fact + full story as an episode.', file=sys.stderr)
@@ -455,13 +625,47 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
         # value IS evidence, so bump the decay anchor (last_confirmed_at). No new row;
         # valid_from untouched (world-truth start stays fixed); stored confidence
         # untouched. history()/as_of() stay bit-for-bit reproducible.
-        conn.execute('UPDATE state_facts SET last_confirmed_at=? WHERE id=?',
-                     (now, open_row['id']))
+        # wq#1629: a re-observation may carry fresher prose for the same token
+        # ("OFFLINE since 46d" -> "OFFLINE since 47d"). Keep the stored note when
+        # this one carries none, so a bare token write never erases the story.
+        # wq#1608: when the caller identifies as a verify probe, also clear
+        # contradicted_at (a matching re-observation resolves a contradiction)
+        # and append the append-only fact_verifications row so this
+        # confirmation is on the record (MINERVA_STALENESS_REVIEW.md §3.2).
+        # Both columns are added lazily (_migrate_verify) only on this path,
+        # so a plain ingest() with no probe behaves exactly as it did before
+        # this ticket -- see _migrate_verify()'s docstring for why.
+        if probe:
+            _migrate_verify(conn)
+        conn.execute('UPDATE state_facts SET last_confirmed_at=?, note=?%s WHERE id=?' %
+                     (', contradicted_at=NULL' if probe else ''),
+                     (now, note if note is not None else open_row['note'],
+                      open_row['id']))
+        if probe:
+            _record_verification(conn, open_row['id'], subject, predicate,
+                                  probe, value, 'confirmed', now)
         _audit(minerva_audit.RECONFIRM, open_row['id'],
                f'{subject}.{predicate}={value[:120]}')
         conn.commit()
         return {'action': 'reconfirmed', 'refreshed': True, 'subject': subject,
-                'predicate': predicate, 'value': value, **alias_note}
+                'predicate': predicate, 'value': value, 'note': note,
+                **alias_note}
+
+    # wq#1608 / §3.4: an observation must never auto-supersede a fact Frank
+    # stated -- when they disagree, the observation is what needs explaining,
+    # not Frank (standing instinct, now enforced here instead of left to
+    # prose). Scoped to probe-driven calls: a plain ingest() from any other
+    # pipeline is unaffected (same behaviour as before this ticket).
+    if probe and open_row is not None and open_row['source_kind'] == 'frank_stated':
+        _migrate_verify(conn)
+        _record_verification(conn, open_row['id'], subject, predicate, probe,
+                              value, 'unknown', now,
+                              detail=f'frank_stated conflict: store={open_row["value"]!r} '
+                                     f'observed={value!r}')
+        conn.commit()
+        return {'action': 'unknown', 'conflict': True, 'subject': subject,
+                'predicate': predicate, 'observed': value,
+                'stored': open_row['value'], **alias_note}
 
     action = 'insert'
     fid = uuid.uuid4().hex
@@ -478,11 +682,11 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
                (id, subject, predicate, value, valid_from, valid_to,
                 ingested_at, invalidated_at, source_ref, confidence, half_life_days,
                 last_confirmed_at, episode_id, fact_class, render_tier, closed_by,
-                source_kind)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                source_kind, note)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (fid, subject, predicate, value, valid_from, open_row['valid_from'],
              now, now, source_ref, confidence, half_life_days, now, episode_id,
-             _fc, _tier, open_row['id'], kind))
+             _fc, _tier, open_row['id'], kind, note))
         _audit(minerva_audit.WRITE, fid,
                f'{subject}.{predicate}={value[:120]} historical:older-than-current '
                f'closed_by={open_row["id"]}')
@@ -505,11 +709,11 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
                (id, subject, predicate, value, valid_from, valid_to,
                 ingested_at, invalidated_at, source_ref, confidence, half_life_days,
                 last_confirmed_at, episode_id, fact_class, render_tier, closed_by,
-                source_kind)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                source_kind, note)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (fid, subject, predicate, value, valid_from, lc_closed['valid_from'],
              now, now, source_ref, confidence, half_life_days, now, episode_id,
-             _fc, _tier, lc_closed['id'], kind))
+             _fc, _tier, lc_closed['id'], kind, note))
         _audit(minerva_audit.WRITE, fid,
                f'{subject}.{predicate}={value[:120]} historical:'
                f'{subject}-is-{lc_closed["value"]} closed_by={lc_closed["id"]}')
@@ -525,15 +729,20 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
             'UPDATE state_facts SET valid_to=?, invalidated_at=?, closed_by=? WHERE id=?',
             (valid_from, now, fid, open_row['id']))
         action = 'superseded'
+        if probe:
+            _migrate_verify(conn)
+            _record_verification(conn, open_row['id'], subject, predicate,
+                                  probe, value, 'superseded', now)
 
     conn.execute(
         '''INSERT INTO state_facts
            (id, subject, predicate, value, valid_from, valid_to,
             ingested_at, invalidated_at, source_ref, confidence, half_life_days,
-            last_confirmed_at, episode_id, fact_class, render_tier, source_kind)
-           VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?)''',
+            last_confirmed_at, episode_id, fact_class, render_tier, source_kind,
+            note)
+           VALUES (?,?,?,?,?,NULL,?,NULL,?,?,?,?,?,?,?,?,?)''',
         (fid, subject, predicate, value, valid_from, now, source_ref, confidence,
-         half_life_days, now, episode_id, _fc, _tier, kind))
+         half_life_days, now, episode_id, _fc, _tier, kind, note))
     _audit(minerva_audit.SUPERSEDE if open_row is not None else minerva_audit.WRITE,
            fid, f'{subject}.{predicate}={value[:120]}'
                 + (f' prior={open_row["id"]}' if open_row is not None else ''))
@@ -548,12 +757,60 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
                    f'{subject}.{cpred} closed by lifecycle {value} ({fid})')
     conn.commit()
     res = {'action': action, 'subject': subject, 'predicate': predicate, 'value': value,
-           'prior': (open_row['value'] if open_row else None), **alias_note}
+           'note': note, 'prior': (open_row['value'] if open_row else None),
+           **alias_note}
+    if split_rule:
+        res['split'] = split_rule
     if closed:
         res['closed'] = closed
     if addition is not None:
         res['new_predicate'] = addition[2]
     return res
+
+def report_observation(subject, predicate, observed, probe, source_ref=None, conn=None):
+    """wq#1608: the single reconciliation contract for any reconciler/probe.
+
+    A reconciler reports what it saw on the wire and NEVER compares itself
+    (MINERVA_STALENESS_REVIEW.md §3.2) -- `if old == new: continue` is a
+    banned shape fleet-wide. This function decides:
+      observed is None / no open fact -> 'unknown'  (nothing mutated; a probe
+        error or an unverifiable subject/predicate is not evidence either way)
+      observed == stored value        -> 'confirmed' (via ingest(), which
+        bumps last_confirmed_at, clears contradicted_at, logs a
+        fact_verifications row)
+      observed != stored, frank_stated -> 'unknown' + conflict=True (never
+        auto-superseded; caller should file a human-review ticket)
+      observed != stored, otherwise   -> 'superseded' (via ingest(), full
+        supersession with every existing invariant -- lifecycle gate,
+        out-of-order guard, canonical predicate, audit trail -- still applied,
+        because it runs through the real ingest() rather than raw SQL)
+
+    Returns a dict with at least {'outcome', 'subject', 'predicate'}.
+    """
+    own = conn is None
+    conn = conn or _conn()
+    try:
+        _migrate(conn)
+        _migrate_verify(conn)
+        reg = registry()
+        subj = subject.strip().lower()
+        pred = canonical_predicate(predicate.strip().lower(), reg)
+        if observed is None:
+            return {'outcome': 'unknown', 'subject': subj, 'predicate': pred,
+                    'detail': 'no observation (probe error or absent)'}
+        open_row = conn.execute(
+            'SELECT * FROM state_facts WHERE subject=? AND predicate=? AND valid_to IS NULL',
+            (subj, pred)).fetchone()
+        if open_row is None:
+            return {'outcome': 'unknown', 'subject': subj, 'predicate': pred,
+                    'detail': 'no open fact for this subject/predicate'}
+        res = ingest(subj, pred, observed, source_ref=source_ref or f'verify:{probe}',
+                     source_kind='observed', probe=probe, conn=conn)
+        res['outcome'] = {'reconfirmed': 'confirmed', 'superseded': 'superseded',
+                          'unknown': 'unknown'}.get(res['action'], res['action'])
+        return res
+    finally:
+        if own: conn.close()
 
 VIOLATION_CLASSES = ('open_alias_row', 'operational_under_closed_lifecycle',
                      'lifecycle_outside_enum', 'multiple_open_rows')
@@ -607,6 +864,8 @@ def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
             'half_life_days', 'last_confirmed_at', 'fact_class', 'render_tier']
     present = _cols(conn)
     cols += [c for c in STALENESS_COLS if c in present]
+    if 'note' in present:
+        cols.append('note')
     q = f'SELECT {",".join(cols)} FROM state_facts WHERE valid_to IS NULL'
     p = []
     if subject:   q += ' AND subject=?';   p.append(subject.strip().lower())
@@ -646,8 +905,9 @@ def as_of(when, subject=None, predicate=None, conn=None):
 def history(subject, predicate, conn=None):
     own = conn is None
     conn = conn or _conn()
+    _migrate(conn)
     rows = [dict(r) for r in conn.execute(
-        '''SELECT value,valid_from,valid_to,ingested_at,invalidated_at,source_ref
+        '''SELECT value,note,valid_from,valid_to,ingested_at,invalidated_at,source_ref
            FROM state_facts WHERE subject=? AND predicate=? ORDER BY valid_from''',
         (subject.strip().lower(), predicate.strip().lower())).fetchall()]
     if own: conn.close()
@@ -668,11 +928,20 @@ def _main():
                          'which wq#1613 never supersedes on a probe mismatch')
     pi.add_argument('--source-kind', default=None, choices=minerva_audit.SOURCE_KINDS,
                     help='override the stamped source_kind (probes pass "observed")')
+    pi.add_argument('--note', default=None,
+                    help='wq#1629: the prose that goes with the value. Given, the '
+                         'value is stored verbatim; omitted, a prose value is split '
+                         'into token + note by rule')
     sub.add_parser('check')
     pc = sub.add_parser('current'); pc.add_argument('subject', nargs='?'); pc.add_argument('predicate', nargs='?')
     pc.add_argument('--limit', type=int, default=None); pc.add_argument('--min-confidence', type=float, default=0.0)
     pa = sub.add_parser('asof'); pa.add_argument('when'); pa.add_argument('subject', nargs='?'); pa.add_argument('predicate', nargs='?')
     ph = sub.add_parser('history'); ph.add_argument('subject'); ph.add_argument('predicate')
+    pr = sub.add_parser('render')  # wq#1640: renders a projection this tool owns
+    pr.add_argument('--prefs-block', action='store_true',
+                    help='wq#1640: the Frank-side hardware quick-ref (Lumen/Thor/'
+                         'Thoth/Mirror/PBox users+TS+LAN IPs), regenerated from '
+                         'state_facts instead of hand-maintained in four places')
     a = ap.parse_args()
 
     if a.cmd == 'init':
@@ -683,7 +952,7 @@ def _main():
                          confidence=a.confidence, half_life_days=a.half_life,
                          new_predicate=a.new_predicate,
                          stated_by_frank=a.stated_by_frank,
-                         source_kind=a.source_kind))
+                         source_kind=a.source_kind, note=a.note))
         except StateGateError as e:
             print(f'REFUSED ({type(e).__name__}): {e}', file=sys.stderr)
             sys.exit(2)
@@ -696,7 +965,8 @@ def _main():
         sys.exit(0 if res['ok'] else 1)
     if a.cmd == 'current':
         for r in current(a.subject, a.predicate, limit=a.limit, min_confidence=a.min_confidence):
-            line = f"{r['subject']:>10}.{r['predicate']:<14} = {r['value']}  (since {r['valid_from'][:10]})"
+            line = (f"{r['subject']:>10}.{r['predicate']:<14} = {r['value_display']}"
+                    f"  (since {r['valid_from'][:10]})")
             line += f"  {r['evidence']}"
             if r.get('eff_confidence', 1.0) < 0.99:
                 line += f"  [conf {r['eff_confidence']:.2f}]"
@@ -709,7 +979,15 @@ def _main():
     if a.cmd == 'history':
         for r in history(a.subject, a.predicate):
             end = r['valid_to'][:10] if r['valid_to'] else 'NOW'
-            print(f"{r['valid_from'][:10]} -> {end:<10} {r['value']}  [{r['source_ref'] or ''}]")
+            print(f"{r['valid_from'][:10]} -> {end:<10} {display_value(r)}"
+                  f"  [{r['source_ref'] or ''}]")
+        return
+    if a.cmd == 'render':
+        if a.prefs_block:
+            print(prefs_block.render_prefs_block())
+        else:
+            print('render: nothing selected (try --prefs-block)', file=sys.stderr)
+            sys.exit(1)
         return
 
 if __name__ == '__main__':
