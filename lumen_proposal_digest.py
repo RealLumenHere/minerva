@@ -27,7 +27,12 @@ OUT = '/home/lumen/minerva/lumen_state.txt'
 # 61% of proposal verifications were scoring judge=0.00 because claims about
 # subsystem behaviour ("lumen-scout triggers a script") were unentailed by a
 # name-only listing. See minerva_verify SEMANTIC mode (judge >= 0.70 gate).
-CAP = 13000
+# 17000 -> 26000 (2026-09-08, wq#1501): FLEET STACK section added and the file was
+# ALREADY being cut at 17000 (17096 real), which silently dropped the GAPS/policy tail
+# the judge relies on for negative claims. The judge does not read this file raw any
+# more: minerva_factpack.judge_digest() compacts the systemd section to fit the local
+# rung's 8K-token window; the generator (deepseek, large context) gets the full file.
+CAP = 26000
 
 
 def _probe_hardware():
@@ -143,7 +148,10 @@ def _fleet_summary():
         rows = current(min_confidence=0.25)
         by_subj = {}
         for r in rows:
-            by_subj.setdefault(r['subject'], {})[r['predicate']] = r['value']
+            # wq#1629: token + note, so the digest keeps the prose that used to
+            # live inside `value`.
+            by_subj.setdefault(r['subject'], {})[r['predicate']] = (
+                r.get('value_display') or r['value'])
         lines = []
         for subj in sorted(by_subj):
             p = by_subj[subj]
@@ -195,6 +203,10 @@ def build_digest():
         '',
         _probe_hardware(),
         '',
+        _probe_stack_versions(),
+        '',
+        _probe_fleet_stack(),
+        '',
         _probe_litellm_models(),
         '',
         _probe_services(),
@@ -216,6 +228,155 @@ def write_digest():
     ok = 'PROBE FAILED' not in text
     return (f'wrote {OUT} ({len(text)} chars) '
             f'{"OK" if ok else "WITH PROBE FAILURES (loader will fall back)"}')
+
+
+
+
+def _probe_stack_versions():
+    """Installed versions of the software the fleet runs.
+
+    Without this the digest described Lumen's own units but nothing about
+    Gitea, Vaultwarden, netdata, cloudflared and the rest, so an upgrade
+    proposal had no ground truth to cite and the hallucination guard scored it
+    judge=0.00. Watchlist lives in /home/lumen/agent/fleet_stack.json.
+    """
+    lines = []
+    # 1. version facts already recorded in the bi-temporal state store
+    try:
+        import sqlite3
+        conn = sqlite3.connect('/home/lumen/minerva/minerva.db', timeout=10)
+        rows = conn.execute(
+            "SELECT subject, predicate, value FROM state_facts "
+            "WHERE valid_to IS NULL AND (predicate LIKE '%version%' OR predicate LIKE '%_ver') "
+            "ORDER BY subject, predicate").fetchall()
+        conn.close()
+        # wq#1501: fold same-predicate/same-value rows across hosts into one line
+        # ("netdata_version = 2.11.0 on anubis,apep,bes,...") — nine near-identical
+        # lines were costing ~600 chars of a capped window for one fact.
+        grouped = {}
+        for subj, pred, val in rows:
+            grouped.setdefault((pred, str(val)[:90]), []).append(subj)
+        for (pred, val), subjs in grouped.items():
+            if len(subjs) == 1:
+                lines.append(f'  {subjs[0]}.{pred} = {val}')
+            else:
+                lines.append(f'  {pred} = {val} on {",".join(sorted(subjs))}')
+    except Exception as e:
+        lines.append(f'  state-store versions PROBE FAILED: {e}')
+
+    # 2. container image tags running on Lumen right now
+    try:
+        out = subprocess.run(
+            ['docker', 'ps', '--format', '{{.Names}}\t{{.Image}}'],
+            capture_output=True, text=True, timeout=20)
+        for ln in out.stdout.strip().splitlines():
+            if '\t' in ln:
+                name, image = ln.split('\t', 1)
+                lines.append(f'  lumen container {name} = {image}')
+    except Exception as e:
+        lines.append(f'  docker images PROBE FAILED: {e}')
+
+    # 3. binaries on Lumen
+    for binname, args in (('tailscale', ['version']), ('cloudflared', ['--version']),
+                          ('ollama', ['--version'])):
+        try:
+            out = subprocess.run([binname] + args, capture_output=True,
+                                 text=True, timeout=15)
+            first = (out.stdout or out.stderr).strip().splitlines()
+            if first:
+                lines.append(f'  lumen {binname} = {first[0][:90]}')
+        except Exception:
+            pass
+
+    body = '\n'.join(lines) if lines else '  (none resolved)'
+    return ('RUNNING VERSIONS (what this fleet has INSTALLED — compare against any '
+            'upstream release or advisory before proposing an upgrade):\n' + body)
+
+
+FLEET_STACK = '/home/lumen/agent/fleet_stack.json'
+_STACK_NAMES = {  # repo -> product name as people (and proposals) say it
+    'nextcloud/server': 'Nextcloud', 'home-assistant/core': 'Home Assistant', 'plausible/analytics': 'Plausible',
+    'actualbudget/actual': 'Actual Budget', 'wonderwhy-er/DesktopCommanderMCP': 'Desktop Commander (DesktopCommanderMCP)',
+    'VictoriaMetrics/VictoriaLogs': 'VictoriaLogs', 'danny-avila/LibreChat': 'LibreChat', 'Klipper3d/klipper': 'Klipper',
+    'TwiN/gatus': 'Gatus', 'BerriAI/litellm': 'LiteLLM', 'go-gitea/gitea': 'Gitea', 'dani-garcia/vaultwarden': 'Vaultwarden',
+    'langgenius/dify': 'Dify', 'esphome/esphome': 'ESPHome', 'renovatebot/renovate': 'Renovate', 'n8n-io/n8n': 'n8n',
+    'netdata/netdata': 'netdata', 'grafana/grafana': 'Grafana', 'searxng/searxng': 'SearXNG', 'binwiederhier/ntfy': 'ntfy',
+    'glanceapp/glance': 'Glance', 'langfuse/langfuse': 'Langfuse', 'aquasecurity/trivy': 'Trivy', 'simonw/sqlite-utils': 'sqlite-utils',
+    'supercorp-ai/supergateway': 'supergateway', 'Kludex/uvicorn': 'uvicorn', 'fastapi/fastapi': 'FastAPI',
+    'qdrant/qdrant': 'Qdrant', 'pgvector/pgvector': 'pgvector', 'ggml-org/llama.cpp': 'llama.cpp (llama-server)',
+    'restic/restic': 'restic', 'tailscale/tailscale': 'Tailscale', 'cloudflare/cloudflared': 'cloudflared',
+    'ollama/ollama': 'Ollama', 'python-kasa/python-kasa': 'python-kasa', 'postgres/postgres': 'PostgreSQL',
+}
+_STACK_ALIASES = {  # repo -> extra tokens to match containers/units/state predicates
+    'home-assistant/core': ['homeassistant', 'home-assistant'], 'nextcloud/server': ['nextcloud'],
+    'plausible/analytics': ['plausible'], 'actualbudget/actual': ['actual'],
+    'wonderwhy-er/DesktopCommanderMCP': ['desktop-commander', 'dc_version'],
+    'ggml-org/llama.cpp': ['llama-server', 'llama-'], 'VictoriaMetrics/VictoriaLogs': ['victorialogs', 'vlogs'],
+    'danny-avila/LibreChat': ['librechat'], 'Klipper3d/klipper': ['klipper'],
+    'python-kasa/python-kasa': ['kasa', 'tapo'], 'binwiederhier/ntfy': ['ntfy'],
+}
+
+
+def _probe_fleet_stack():
+    """wq#1386/#1501: name the PRODUCTS the fleet runs, one line each, with whatever
+    installed version/unit the probes can resolve. RUNNING VERSIONS shows
+    'langgenius/dify-api:1.14.2' but never the word Dify, so a true claim that the
+    fleet runs Dify / Renovate / Home Assistant / ESPHome was NOT_IN_CONTEXT."""
+    try:
+        repos = json.load(open(FLEET_STACK)).get('repos', {})
+    except Exception as e:
+        return f'FLEET STACK: PROBE FAILED ({e})'
+    containers, units, facts = [], [], []
+    try:
+        out = subprocess.run(['docker', 'ps', '--format', '{{.Names}}\t{{.Image}}'], capture_output=True, text=True, timeout=20)
+        containers = [ln.split('\t', 1) for ln in out.stdout.strip().splitlines() if '\t' in ln]
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(['systemctl', 'list-units', '--all', '--no-legend', '--plain', '-t', 'service,timer'],
+                             capture_output=True, text=True, timeout=20)
+        units = [ln.split()[0] for ln in out.stdout.splitlines() if ln.strip()]
+    except Exception:
+        pass
+    try:
+        import sqlite3
+        conn = sqlite3.connect('/home/lumen/minerva/minerva.db', timeout=10)
+        facts = conn.execute("SELECT subject, predicate, value FROM state_facts WHERE valid_to IS NULL "
+                             "AND (predicate LIKE '%version%' OR predicate LIKE '%_ver')").fetchall()
+        conn.close()
+    except Exception:
+        pass
+    lines = []
+    _UNIT_JUNK = ('lumen-job-', 'ntfy-onfailure@', '-alert', '-smoke', '-probe', '-relay', '-tap-')
+    for repo, where in repos.items():
+        owner, base = repo.split('/', 1)
+        name = _STACK_NAMES.get(repo, base)
+        toks = [base.lower()] + [a.lower() for a in _STACK_ALIASES.get(repo, [])]
+        if base.lower() in ('server', 'core', 'analytics', 'actual', 'postgres'):
+            toks = [a.lower() for a in _STACK_ALIASES.get(repo, [])] or [owner.lower()]
+        found = []
+        seen = set()
+        for cname, image in containers:
+            il = image.lower()
+            if any(t in il for t in toks):
+                short = image.rsplit('/', 1)[-1][:40]
+                if short not in seen:
+                    found.append(short); seen.add(short)
+        vers = {}
+        for subj, pred, val in facts:
+            pl = pred.lower()
+            if any(t in pl for t in toks):
+                v = str(val).split(' ')[0].strip('(),')
+                vers.setdefault(v, []).append(subj)
+        for v, hosts in vers.items():
+            found.append(f'{v} on {",".join(sorted(hosts))}')
+        us = [u for u in units if any(t in u.lower() for t in toks) and not any(j in u for j in _UNIT_JUNK)]
+        if us:
+            found.append('unit ' + ','.join(sorted(set(us))[:2]))
+        inst = (' | ' + '; '.join(found)) if found else ''
+        lines.append(f'  - {name} [{repo}]: {where}{inst}'[:180])
+    return ('FLEET STACK (products this fleet RUNS, from /home/lumen/agent/fleet_stack.json + live probes; '
+            'a product listed here IS running in the fleet even when no version resolved):\n' + '\n'.join(lines))
 
 
 if __name__ == '__main__':
