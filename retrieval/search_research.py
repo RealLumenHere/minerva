@@ -9,6 +9,9 @@ Usage:
 """
 import os, sys, argparse, pathlib, requests, psycopg2
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from asserted_at import render as render_asserted   # wq#1773
+
 OLLAMA_URL  = "http://127.0.0.1:11434/api/embeddings"  # 2026-06-12: was retired PBox
 EMBED_MODEL = "nomic-embed-text:latest"
 
@@ -52,7 +55,8 @@ def main():
     sql = """
         SELECT filepath, filename, category, mtime,
                embedding <=> %s::vector AS distance,
-               substring(content, 1, %s) AS snippet
+               substring(content, 1, %s) AS snippet,
+               asserted_at
         FROM research_docs
         WHERE (%s::text IS NULL OR category = %s)
         ORDER BY embedding <=> %s::vector
@@ -61,8 +65,11 @@ def main():
     cur.execute(sql, (vec, args.snippet, args.category, args.category, vec, args.k))
     rows = cur.fetchall()
     for i, r in enumerate(rows, 1):
-        fp, fn, cat, mt, dist, snip = r
-        print(f"[{i}] cos-dist={dist:.4f}  cat={cat}  mtime={mt:%Y-%m-%d}")
+        fp, fn, cat, mt, dist, snip, asserted = r
+        # wq#1773: the as-of date rides on the attribution line so a July report and
+        # a September one stop arriving in a reader's context looking identical.
+        # Display only -- ORDER BY above is untouched.
+        print(f"[{i}] cos-dist={dist:.4f}  cat={cat}  {render_asserted(asserted)}")
         print(f"    {fp}")
         print(f"    {snip.strip()[:args.snippet]}")
         print()

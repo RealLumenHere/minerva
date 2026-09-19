@@ -8,6 +8,9 @@ from datetime import datetime, timezone
 import requests, psycopg2
 from psycopg2.extras import execute_values
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from asserted_at import asserted_at as doc_asserted_at   # wq#1773
+
 ROOT           = pathlib.Path(os.environ.get("LUMEN_RESEARCH_ROOT", "/home/lumen/scratch/research"))
 OLLAMA_URL     = "http://localhost:11434/api/embeddings"
 EMBED_MODEL    = "nomic-embed-text:latest"
@@ -114,15 +117,15 @@ def existing_hashes(conn):
 def upsert_batch(conn, rows):
     if not rows: return
     sql = """
-    INSERT INTO research_docs (filepath, filename, category, mtime, size_bytes, content, content_hash, embedding)
+    INSERT INTO research_docs (filepath, filename, category, mtime, size_bytes, content, content_hash, embedding, asserted_at)
     VALUES %s
     ON CONFLICT (filepath) DO UPDATE SET
       filename=EXCLUDED.filename, category=EXCLUDED.category, mtime=EXCLUDED.mtime,
       size_bytes=EXCLUDED.size_bytes, content=EXCLUDED.content, content_hash=EXCLUDED.content_hash,
-      embedding=EXCLUDED.embedding, indexed_at=now();
+      embedding=EXCLUDED.embedding, indexed_at=now(), asserted_at=EXCLUDED.asserted_at;
     """
     with conn.cursor() as cur:
-        execute_values(cur, sql, rows, template="(%s,%s,%s,%s,%s,%s,%s,%s)")
+        execute_values(cur, sql, rows, template="(%s,%s,%s,%s,%s,%s,%s,%s,%s)")
     conn.commit()
 
 def log_error(conn, fp, err):
@@ -187,7 +190,11 @@ def main():
             emb = embed(content)
             if emb is None:
                 log_error(conn, rel, "embed-failed"); err_c += 1; continue
-            batch.append((rel, fp.name, classify(fp.name), mtime, st.st_size, content, h, emb))
+            # wq#1773: asserted_at = the doc's own `date:` if it declares one, else
+            # mtime. Computed here, never from now()/indexed_at, so a re-index of an
+            # old file does not make it read as fresh.
+            batch.append((rel, fp.name, classify(fp.name), mtime, st.st_size, content, h, emb,
+                          doc_asserted_at(content, mtime)))
             new += 1
             if len(batch) >= BATCH_SIZE:
                 upsert_batch(conn, batch); batch.clear()
