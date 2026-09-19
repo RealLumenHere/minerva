@@ -1,0 +1,201 @@
+# Verifier + predicate registry — wq#1613 (MINERVA_STALENESS_REVIEW.md §3.3, §3.4).
+# Deployed to /home/lumen/minerva/verify/registry.yaml; shared file with wq#1632
+# (predicate class / closes_on_decommission), which tolerates the probe /
+# verify_interval_days / source_kind keys added here.
+#
+# Resolution order for "is this fact due?" (lumen_verify.py sweep):
+#   1. state_facts.verify_interval_days (per-fact override, NULL by default)
+#   2. predicates.<name>.verify_interval_days (this file)
+#   3. class_defaults.<predicates.<name>.class> (this file)
+#   A predicate with no probe assigned is never swept.
+version: 1
+
+class_defaults:
+  status: 3
+  config: 14
+  identity: 90
+  # hardware carries its own interval per predicate (node_storage probe, 7d).
+  # narrative and price/market are out of scope for this sweep (§3.3, §3.9).
+
+probes:
+  tailscale_ip:
+    command: "tailscale status --json"
+    predicates: [tailscale_ip]
+    subjects: known-in-store
+    interval_days: 1
+  fleet_inventory:
+    command: "fleet-inv get <subject>"
+    predicates: [lan_ip, ssh_user, power_plug]
+    subjects: known-in-store
+    interval_days: 1
+  service_state:
+    command: "systemctl is-active <unit>  # ssh-list, unit named by the fact value"
+    predicates_pattern: "*_status"
+    subjects: known-in-store
+    interval_days: 1
+  node_storage:
+    command: "lsblk -J + /proc/mdstat + dmidecode --type 17"
+    predicates: [storage, storage_layout, ram]
+    subjects: known-in-store
+    interval_days: 7
+  os_kernel:
+    command: "uname -r / lsb_release -ds / pkg version query"
+    predicates: [kernel, os]
+    predicates_pattern: "*_version"
+    subjects: known-in-store
+    interval_days: 7
+  plug_map:
+    command: "plug-ctl status + HA entity list"
+    predicates: [powers_node, plug_ip, ha_entity]
+    subjects: known-in-store
+    interval_days: 3
+  endpoint_live:
+    command: "HTTP GET"
+    predicates: [url, port]
+    subjects: known-in-store
+    interval_days: 1
+  node_liveness:
+    # wq#1620: khepri/wadjet sat 26d/53d offline with lumen_state still
+    # claiming POWERED ON / IDLE+available -- no probe backed a node's own
+    # reachability. ssh, then tailscale ping (app-layer, not fooled by ICMP
+    # filtering); either succeeding means available, both failing means
+    # offline is the observation, not an unknown.
+    command: "ssh <subject> true || tailscale ping --c 1 <subject>"
+    predicates: [availability]
+    subjects: known-in-store
+    interval_days: 3
+
+predicates:
+  lifecycle:
+    class: status
+    reserved: true
+    enum: [provisioning, active, degraded, offline, decommissioned, retired]
+  availability:
+    class: status
+    closes_on_decommission: true
+    probe: node_liveness
+    closes_on_decommission: false
+  status:
+    class: status
+    closes_on_decommission: true
+    probe: service_state
+  tailnet_routing:
+    class: status
+    closes_on_decommission: true
+  serving_model:
+    class: config
+    closes_on_decommission: true
+  embed_model:
+    class: config
+    closes_on_decommission: true
+  litellm_aliases:
+    class: config
+    closes_on_decommission: true
+  dc_handle_store:
+    class: config
+    closes_on_decommission: true
+  ollama_version:
+    class: config
+    closes_on_decommission: true
+    probe: os_kernel
+  # Identity / hardware — a decommissioned Mac still has 64 GB. Stay open.
+  role:
+    class: identity
+    closes_on_decommission: false
+  tailscale_ip:
+    class: identity
+    closes_on_decommission: false
+    probe: tailscale_ip
+    verify_interval_days: 1
+    source_kind: observed
+  lan_ip:
+    class: identity
+    closes_on_decommission: false
+    probe: fleet_inventory
+    verify_interval_days: 1
+    source_kind: observed
+  ssh_user:
+    class: identity
+    closes_on_decommission: false
+    probe: fleet_inventory
+    verify_interval_days: 1
+    source_kind: observed
+  ram:
+    class: hardware
+    closes_on_decommission: false
+    probe: node_storage
+    verify_interval_days: 7
+    source_kind: observed
+  storage:
+    class: hardware
+    closes_on_decommission: false
+    probe: node_storage
+    verify_interval_days: 7
+    source_kind: observed
+  hardware:
+    class: hardware
+    closes_on_decommission: false
+  os:
+    class: config
+    closes_on_decommission: false
+    probe: os_kernel
+    verify_interval_days: 7
+    source_kind: observed
+  kernel:
+    class: config
+    closes_on_decommission: false
+    probe: os_kernel
+    verify_interval_days: 7
+    source_kind: observed
+  power_plug:
+    class: config
+    closes_on_decommission: false
+    probe: fleet_inventory
+    verify_interval_days: 1
+    source_kind: observed
+  powers_node:
+    class: config
+    closes_on_decommission: false
+    probe: plug_map
+    verify_interval_days: 3
+    source_kind: observed
+  plug_ip:
+    class: config
+    closes_on_decommission: false
+    probe: plug_map
+    verify_interval_days: 3
+    source_kind: observed
+  ha_entity:
+    class: config
+    closes_on_decommission: false
+    probe: plug_map
+    verify_interval_days: 3
+    source_kind: observed
+  url:
+    class: config
+    closes_on_decommission: true
+    probe: endpoint_live
+    verify_interval_days: 1
+    source_kind: observed
+  port:
+    class: config
+    closes_on_decommission: true
+    probe: endpoint_live
+    verify_interval_days: 1
+    source_kind: observed
+
+patterns:
+  # Globs checked after exact names. Operational axes close on decommission.
+  - match: "*_status"
+    class: status
+    closes_on_decommission: true
+    probe: service_state
+  - match: "mcp_*"
+    class: config
+    closes_on_decommission: true
+  - match: "*_version"
+    class: config
+    closes_on_decommission: true
+    probe: os_kernel
+    verify_interval_days: 7
+    source_kind: observed
