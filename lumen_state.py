@@ -78,6 +78,21 @@ class PredicateNearDuplicate(StateGateError):
     two names don't match, so both stay open forever. A real rename should use
     the existing owner predicate (or a state_registry.json alias), not a new one."""
 
+class FactIdNull(StateGateError):
+    """wq#1999: the open row for this (subject,predicate) has id IS NULL, so it
+    cannot be superseded -- `UPDATE ... WHERE id=?` bound to NULL matches zero
+    rows (SQL NULL never equals NULL), the old row stays open, and the INSERT
+    that follows collides with idx_sf_one_open. Raised at the open-row lookup so
+    the cause is named, instead of surfacing three steps later as a bare
+    `UNIQUE constraint failed` that took wq#2135 three attempts to diagnose.
+    A StateGateError, so it carries the same 'nothing was written' contract.
+
+    _heal_null_ids() (called from _migrate, i.e. before this check on every
+    ingest path) backfills these rows and installs triggers against new ones, so
+    reaching this guard means something bypassed both -- a raw writer on its own
+    connection, or a dropped trigger. Not dead code: it is the assertion that
+    keeps the failure legible if the safety net is ever removed."""
+
 _REGISTRY = {}
 
 def registry(path=None):
@@ -228,6 +243,43 @@ def _migrate(conn):
         conn.execute("ALTER TABLE state_facts ADD COLUMN note TEXT")
         conn.commit()
     minerva_audit.ensure_table(conn)
+    _heal_null_ids(conn)
+
+def _heal_null_ids(conn):
+    """wq#2135: `id TEXT PRIMARY KEY` accepts NULL in SQLite, and a writer that
+    omitted `id` left rows whose id is NULL. `UPDATE ... WHERE id=?` never
+    matches NULL, so ingest could not close such a row on supersession, and the
+    new INSERT then tripped idx_sf_one_open (UNIQUE subject, predicate). Backfill
+    once, and add a trigger so no writer can insert an id-less row again. The
+    triggers' presence in sqlite_master gates the work, so an already-healed DB
+    (and every read-only caller) pays one SELECT.
+
+    wq#1999: the INSERT trigger alone left the column reachable -- an `UPDATE
+    state_facts SET id=NULL` was still accepted, and SQLite cannot add NOT NULL
+    to an existing column without rebuilding the table (state_facts is the live
+    core of fleet memory; a rebuild is a far bigger risk than the hole it
+    closes). The pair of triggers gives the same guarantee in place: NULL on
+    insert is filled, NULL on update is refused. Insert is healed rather than
+    refused because omitting the column is plausible writer shorthand, whereas
+    an UPDATE that sets id to NULL is never anything but a bug, and ABORT names
+    it at the write instead of at some later supersession."""
+    have = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='trigger' AND name IN "
+        "('trg_state_facts_id_default', 'trg_state_facts_id_not_null')")}
+    if len(have) == 2:
+        return
+    conn.execute("UPDATE state_facts SET id=lower(hex(randomblob(16))) WHERE id IS NULL")
+    conn.execute('''CREATE TRIGGER IF NOT EXISTS trg_state_facts_id_default
+        AFTER INSERT ON state_facts WHEN NEW.id IS NULL
+        BEGIN
+            UPDATE state_facts SET id=lower(hex(randomblob(16))) WHERE rowid=NEW.rowid;
+        END''')
+    conn.execute('''CREATE TRIGGER IF NOT EXISTS trg_state_facts_id_not_null
+        AFTER UPDATE OF id ON state_facts WHEN NEW.id IS NULL
+        BEGIN
+            SELECT RAISE(ABORT, 'state_facts.id must never be NULL (wq#1999)');
+        END''')
+    conn.commit()
 
 def _migrate_verify(conn):
     """wq#1608 / wq#1613: verification-evidence columns + audit table, added
@@ -619,6 +671,16 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
     open_row = conn.execute(
         'SELECT * FROM state_facts WHERE subject=? AND predicate=? AND valid_to IS NULL',
         (subject, predicate)).fetchone()
+
+    # wq#1999: every path below keys off open_row['id'] -- reconfirm's UPDATE,
+    # supersede's close, closed_by lineage. A NULL id silently no-ops all of
+    # them, so refuse here with the cause named. See FactIdNull.
+    if open_row is not None and open_row['id'] is None:
+        raise FactIdNull(
+            f"open row for {subject}.{predicate} has id IS NULL and cannot be "
+            f"superseded or reconfirmed. Backfill it "
+            f"(lumen_state._heal_null_ids, or UPDATE state_facts SET "
+            f"id=lower(hex(randomblob(16))) WHERE id IS NULL) and retry.")
 
     if open_row is not None and open_row['value'] == value:
         # EVIDENCE REFRESH (supersedes the old pure-noop): re-observing an identical

@@ -55,6 +55,10 @@ For the item below, return ONLY a JSON object:
 Scoring guide:
 - audience_relevance 0.9+: concrete tool/tutorial homelab users want. 0.5: interesting news. 0.2: too academic. 0.0: irrelevant to homelab.
 - self_relevance 0.9+: a framework/library Lumen could integrate (memory system, agent framework, eval tool, verification library). 0.6: a technique Lumen could implement from scratch. 0.3: inspiration only. 0.0: not applicable (e.g., image gen when Lumen is text-only).
+- OVERRIDE: if the item concerns something on the RUNNING STACK list below, self_relevance is 0.8+ regardless of the guide above. A release or CVE in software the fleet already operates is directly actionable — upgrade, patch, or config change — not merely "inspiration". Do not score it 0.0 just because it is not a new thing to adopt.
+
+RUNNING STACK (software this fleet operates today):
+{stack}
 
 ITEM:
 Source: {source}
@@ -62,6 +66,16 @@ Title: {title}
 Content: {content}
 
 Return only the JSON object.'''
+
+
+def _stack_line():
+    """What the fleet actually runs. Without this the classifier scored a Gitea
+    CVE at self=0.00 because its Lumen description never mentioned Gitea."""
+    try:
+        repos = json.loads(Path('/home/lumen/agent/fleet_stack.json').read_text())['repos']
+        return '; '.join(f"{r.split('/')[-1]} ({w})" for r, w in repos.items())[:2000]
+    except Exception:
+        return '(stack list unavailable)'
 
 def _failed(reason):
     """A FAILED call is not a verdict.
@@ -79,9 +93,10 @@ def classify_cerebras(item: dict) -> dict:
     if not LITELLM_KEY:
         return _failed('no_key')
     prompt = (PROMPT
+            .replace('{stack}', _stack_line())
             .replace('{source}', str(item.get('source',''))[:80])
             .replace('{title}', str(item.get('title',''))[:300])
-            .replace('{content}', str(item.get('content','') or item.get('title',''))[:1500]))
+            .replace('{content}', str(item.get('content','') or item.get('title',''))[:2500]))
     try:
         # 30s was too tight for cerebras-oss-120b under load: 1,228 read
         # timeouts recorded. Retry transient failures instead of burning the item.
@@ -147,23 +162,29 @@ def get_unprocessed_intel(limit=40):
     # N are almost all already done. That made backlog recovery impossible.
     conn.execute("ATTACH DATABASE ? AS m", (str(DB),))
     rows = conn.execute(
-        'SELECT s.id, s.source, s.title, s.score, s.ts FROM seen_items s '
+        'SELECT s.id, s.source, s.title, s.score, s.ts, s.url, s.summary FROM seen_items s '
         'WHERE s.ts > ? AND s.id NOT IN (SELECT id FROM m.classified_intel) '
         'ORDER BY s.ts DESC LIMIT ?', (cutoff, limit)).fetchall()
     conn.close()
-    return [{'id':r[0],'source':r[1],'title':r[2],'content':r[2],'ts':r[4]} for r in rows]
+    # content = the actual source material when the fetcher captured it. It used
+    # to be a second copy of the title, so every score was a judgement on a
+    # headline. Fall back to the title only for pre-migration rows.
+    return [{'id': r[0], 'source': r[1], 'title': r[2],
+             'content': (r[6] or r[2]), 'ts': r[4],
+             'url': (r[5] or ''), 'summary': (r[6] or '')} for r in rows]
 
 def save_classification(item, result):
     conn = sqlite3.connect(DB)
     conn.execute('''INSERT OR REPLACE INTO classified_intel
-        (id, source, title, url, audience_relevance, self_relevance, category, reasoning, ts, processed)
-        VALUES (?,?,?,?,?,?,?,?,?,0)''',
+        (id, source, title, url, audience_relevance, self_relevance, category, reasoning, ts, processed, summary)
+        VALUES (?,?,?,?,?,?,?,?,?,0,?)''',
         (item['id'], item.get('source',''), item.get('title','')[:300], item.get('url',''),
          result['audience_relevance'], result['self_relevance'], result['category'],
          result['reasoning'] + (' | HINT: '+result['adoption_hint'] if result.get('adoption_hint') else ''),
          # keep the SOURCE timestamp; stamping now() destroyed publication
          # provenance and made per-day intake stats read as classify-date.
-         item.get('ts') or datetime.now(timezone.utc).isoformat()))
+         item.get('ts') or datetime.now(timezone.utc).isoformat(),
+         (item.get('summary') or '')[:4000]))
     conn.commit()
     conn.close()
 
@@ -181,6 +202,13 @@ def run(limit=40):
             fallbacks += 1
             log(f'  [{i}/{len(items)}] RETRY-LATER ({r["reasoning"][:60]}) {str(item.get("title",""))[:50]}')
             continue
+        # DETERMINISTIC FLOOR: whether the fleet runs a thing is a fact from
+        # fleet_stack.json, not something to delegate to an LLM. Without this
+        # the classifier scored Gitea/Vaultwarden/netdata CVEs at self=0.00.
+        floor = {'Fleet Advisories': 0.9, 'Fleet Releases': 0.7}.get(item.get('source',''))
+        if floor and r['self_relevance'] < floor:
+            log(f'    floor {r["self_relevance"]:.2f} -> {floor:.2f} (source is the fleet\'s own stack)')
+            r['self_relevance'] = floor
         save_classification(item, r)
         if r['self_relevance'] >= 0.6: high_self += 1
         log(f'  [{i}/{len(items)}] aud={r["audience_relevance"]:.2f} self={r["self_relevance"]:.2f} {r["category"]:12s} {item["title"][:60]}')

@@ -34,7 +34,16 @@ from pathlib import Path
 CACHE = Path('/tmp/minerva_factpack_cache.json')
 TTL = int(os.getenv('FACTPACK_TTL', '600'))
 TOP_K = int(os.getenv('FACTPACK_TOP_K', '25'))
-CAP = int(os.getenv('FACTPACK_CAP', '15500'))
+# wq#1528 (design §2c/§2e): the facts budget is RESERVED before the digest.
+# TOP_K=25 lines x ~160 chars each ≈ 4000; sized so the full retrieval survives,
+# not whatever happens to be left after the digest (at CAP 20000 the compact
+# digest 17535 + closed-world 693 left facts only 1772 chars — 11 of 25 lines).
+FACTS_RESERVE = int(os.getenv('FACTPACK_FACTS_RESERVE', '4000'))
+# 15500 -> 20000 (wq#1501) -> 22500 (wq#1528): must be >= compact judge digest
+# (17535 on 2026-09-13) + CLOSED_WORLD (693) + FACTS_RESERVE, and
+# <= VERIFY_JUDGE_CTX_CHARS; minerva_verify asserts that ordering at import,
+# bounded above by the qwen36-local rung window (n_ctx 8192 tokens).
+CAP = int(os.getenv('FACTPACK_CAP', '22500'))
 RERANK_URL = 'http://127.0.0.1:8140/rerank'
 DIGEST = Path('/home/lumen/minerva/lumen_state.txt')
 
@@ -232,6 +241,43 @@ CLOSED_WORLD = (
     "subsystem; a mechanism absent from every relevant module card is absent.\n")
 
 
+_SVC_HEAD = 'Lumen/Minerva systemd units'
+_MODE_RE = re.compile(r'^- (?P<name>\S+) \[(?P<mode>[^\]]+)\]: (?P<desc>.*)$')
+
+
+def judge_digest(digest: str) -> str:
+    """wq#1501: the digest the JUDGE sees. Same file as the generator's, but the
+    systemd section (13K of the 25K) is compacted to name + run-mode so the whole
+    inventory still fits an 8K-token local rung alongside the retrieved facts.
+    Absence claims keep their closed-world basis (every unit is still named);
+    what a unit DOES arrives through the per-claim [service] retrieval instead.
+    Deterministic string transform — no probes, so it costs nothing."""
+    start = digest.find(_SVC_HEAD)
+    if start < 0:
+        return digest
+    end = digest.find('\n\n', start)
+    if end < 0:
+        end = len(digest)
+    block = digest[start:end].splitlines()
+    out = [block[0].split(' — ')[0] + ' — name [run mode] (descriptions: see [service] facts below).']
+    for ln in block[1:]:
+        m = _MODE_RE.match(ln)
+        if not m:
+            continue
+        mode = m.group('mode')
+        if mode.startswith('timer-driven by '):
+            mode = 'timer ' + mode[len('timer-driven by '):]
+        out.append(f'- {m.group("name")} [{mode}]')
+    return digest[:start] + '\n'.join(out) + digest[end:]
+
+
+def judge_digest_len() -> int:
+    try:
+        return len(judge_digest(DIGEST.read_text()))
+    except Exception:
+        return 0
+
+
 def build_context(answer_text):
     """Hybrid context: static digest (narrative + documented GAPS, which entail
     negative claims) + per-claim retrieved facts under a closed-world rule
@@ -245,16 +291,33 @@ def build_context(answer_text):
     so the guard never sees less than the pre-factpack baseline.
     """
     try:
-        digest = DIGEST.read_text()
+        digest = judge_digest(DIGEST.read_text())
     except Exception:
         digest = HEADER
     try:
         facts = retrieve(answer_text)
         if len(facts) < 5:
             raise ValueError('thin retrieval')
-        return (digest + CLOSED_WORLD + '\n'.join(facts))[:CAP]
+        # wq#1501: the digest is NEVER truncated here — it was (CAP 15500 < 17096
+        # digest), which dropped the digest tail and every retrieved fact. Facts
+        # fill whatever budget remains under CAP; the judge window (VERIFY_JUDGE_CTX_
+        # CHARS) is the outer bound and minerva_verify asserts the ordering at import.
+        head = digest + CLOSED_WORLD
+        # wq#1528: facts keep at least FACTS_RESERVE even if the digest grows past
+        # its share of CAP. The import-time assertion keeps CAP >= head + reserve;
+        # if the digest still outgrows it between restarts, the overflow spills
+        # into the judge window's slack (verify slices context[:JUDGE_CTX_CHARS],
+        # facts sit at the END) — so a digest spurt costs the facts TAIL, never
+        # every fact, which is exactly the wq#1383-class failure this prevents.
+        room = max(FACTS_RESERVE, CAP - len(head))
+        body, used = [], 0
+        for f in facts:
+            if used + len(f) + 1 > room:
+                break
+            body.append(f); used += len(f) + 1
+        return head + '\n'.join(body)
     except Exception:
-        return digest[:CAP]
+        return digest
 
 
 if __name__ == '__main__':

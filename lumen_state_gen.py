@@ -47,7 +47,10 @@ def _render_fact(f):
     stale value no longer reads as authoritative. Stable facts (half_life NULL =>
     eff_confidence ~= 1.0) render exactly as before, with no marker."""
     eff = f.get('eff_confidence', 1.0)
-    base = f"**{f['predicate']}**={f['value']}{STALENESS_MARK.get(f.get('staleness'), '')}"
+    # wq#1629: value_display is the token plus its note, so a fact whose prose was
+    # split out of `value` still renders the whole sentence here.
+    shown = f.get('value_display') or f['value']
+    base = f"**{f['predicate']}**={shown}{STALENESS_MARK.get(f.get('staleness'), '')}"
     if eff < 0.6:
         return f"{base}  (conf {eff:.2f} — reconfirm)"
     return base

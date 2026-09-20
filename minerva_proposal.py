@@ -209,6 +209,7 @@ __LUMEN_STATE__
 NEW INTEL ITEM TO EVALUATE:
 Title: __TITLE__
 Source: __SOURCE__
+URL: __URL__
 Category: __CATEGORY__
 Adoption hint from classifier: __HINT__
 Content:
@@ -309,7 +310,7 @@ def cerebras_gen(prompt, retries=3):
 def get_candidates(min_self=0.6, limit=10):
     conn = sqlite3.connect(DB)
     rows = conn.execute(
-        '''SELECT id, source, title, reasoning, category, self_relevance, audience_relevance
+        '''SELECT id, source, title, reasoning, category, self_relevance, audience_relevance, summary, url
            FROM classified_intel
            WHERE self_relevance >= ? AND processed = 0
            ORDER BY self_relevance DESC, audience_relevance DESC
@@ -436,16 +437,22 @@ def run(min_self=0.6, limit=10):
     log(f'Candidates: {len(candidates)}')
     generated = 0
     rejected = 0
-    for intel_id, source, title, reasoning, category, sr, ar in candidates:
+    for intel_id, source, title, reasoning, category, sr, ar, summary, url in candidates:
         hint = reasoning.split('HINT:', 1)[1].strip() if 'HINT:' in reasoning else ''
-        content = reasoning
+        # Ground the proposal in the SOURCE text, not in the classifier's own
+        # reasoning about it. Proposing from reasoning was self-referential:
+        # there was no external claim for the hallucination guard to entail
+        # against, which is why judge scores sat at 0.00. Pre-migration rows
+        # have no summary, so they keep the old behaviour.
+        content = summary or reasoning
         prompt = (PROMPT_TMPL
                   .replace('__LUMEN_STATE__', LUMEN_STATE)
                   .replace('__TITLE__', str(title)[:300])
                   .replace('__SOURCE__', str(source)[:80])
+                  .replace('__URL__', str(url or 'n/a')[:300])
                   .replace('__CATEGORY__', str(category)[:30])
                   .replace('__HINT__', str(hint)[:400])
-                  .replace('__CONTENT__', str(content)[:800]))
+                  .replace('__CONTENT__', str(content)[:3000]))
         # wq#112: CPP formatter (arXiv:2607.08018), flag-gated via
         # /etc/lumen/prompt_engine.cfg cpp_enabled; fail-open at both layers.
         try:

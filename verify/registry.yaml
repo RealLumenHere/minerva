@@ -39,9 +39,17 @@ probes:
     subjects: known-in-store
     interval_days: 7
   os_kernel:
-    command: "uname -r / lsb_release -ds / pkg version query"
+    # wq#1999: this probe only knows `uname`. It used to claim `*_version` too
+    # (and ollama_version by name), so every semantic-version fact it swept was
+    # "observed" as the kernel NAME -- `uname -s` -> "Linux" -- and superseded
+    # 12 real versions (netdata 2.11.0, ollama 0.32.6, dc 0.2.46, grafana
+    # 13.1.1) with the string "Linux". A probe must only claim predicates it
+    # can actually observe; probe_os_kernel now refuses anything else outright.
+    # Package versions need a per-package query and have no probe yet, so they
+    # are unswept (line 10: "no probe assigned is never swept") rather than
+    # wrongly swept.
+    command: "uname -r (kernel) / os-release PRETTY_NAME (os)"
     predicates: [kernel, os]
-    predicates_pattern: "*_version"
     subjects: known-in-store
     interval_days: 7
   plug_map:
@@ -97,7 +105,7 @@ predicates:
   ollama_version:
     class: config
     closes_on_decommission: true
-    probe: os_kernel
+    # wq#1999: no probe. os_kernel here meant `uname -s` -> "Linux".
   # Identity / hardware — a decommissioned Mac still has 64 GB. Stay open.
   role:
     class: identity
@@ -193,9 +201,11 @@ patterns:
   - match: "mcp_*"
     class: config
     closes_on_decommission: true
+  # wq#1999: deliberately NO probe. A semantic version needs a per-package
+  # query (`netdata -v`, `ollama --version`, ...); os_kernel only runs `uname`,
+  # so it reported "Linux" for every one of these. Unswept beats wrongly swept.
   - match: "*_version"
     class: config
     closes_on_decommission: true
-    probe: os_kernel
     verify_interval_days: 7
     source_kind: observed

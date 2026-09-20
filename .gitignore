@@ -43,7 +43,16 @@ v4/reports/fa_episode_failures.json
 # wq#2055: same class as convo_learn.hwm above -- *.hwm is a cursor/high-water-mark
 # runtime file by definition, never source, whatever module it belongs to
 *.hwm
-# wq#2055: per-run watch-job artifacts (rollback marker + raw event log), not source;
-# v4/reports/*_watch.csv is the actual kept output and stays tracked
+# wq#2055: per-run watch-job artifacts (rollback marker + raw event log), not source
 v4/reports/*_watch_ROLLED_BACK
 v4/reports/*_watch_events.log
+
+# wq#2190: runtime state rewritten continuously by daemons, never source. Every
+# reader tolerates absence (minerva_proposal._load_lumen_state falls back,
+# minerva_factpack wraps DIGEST.read_text in try/except); tracking them kept the
+# primary tree permanently dirty. Supersedes wq#2055's "watch.csv stays tracked":
+# the watch job appends ~10K rows/day, which is telemetry, not kept output.
+lumen_state.txt
+proposals_decisions.log
+reports/familiarity_summary.json
+v4/reports/*_watch.csv
