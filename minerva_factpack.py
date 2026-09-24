@@ -28,7 +28,8 @@ The static digest path stays as fallback: build_context() degrades to
 lumen_state.txt on any corpus failure, so the guard can never see LESS than
 it did before this module existed.
 """
-import os, re, json, time, sqlite3, subprocess
+import os, re, json, time, sqlite3, subprocess, hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 
 CACHE = Path('/tmp/minerva_factpack_cache.json')
@@ -44,6 +45,11 @@ FACTS_RESERVE = int(os.getenv('FACTPACK_FACTS_RESERVE', '4000'))
 # <= VERIFY_JUDGE_CTX_CHARS; minerva_verify asserts that ordering at import,
 # bounded above by the qwen36-local rung window (n_ctx 8192 tokens).
 CAP = int(os.getenv('FACTPACK_CAP', '22500'))
+# wq#2430: provenance-tagged evidence. Each retrieved chunk carries its origin
+# URI, ingest timestamp, and a staleness flag; minerva_verify rejects claims
+# whose ONLY support is a stale chunk. A chunk is stale when it was ingested
+# longer ago than EVIDENCE_TTL seconds (0 disables the flag entirely).
+EVIDENCE_TTL = int(os.getenv('FACTPACK_EVIDENCE_TTL', str(7 * 86400)))
 RERANK_URL = 'http://127.0.0.1:8140/rerank'
 DIGEST = Path('/home/lumen/minerva/lumen_state.txt')
 
@@ -167,10 +173,22 @@ def _probe_hw():
     return out
 
 
+# wq#2430: epoch seconds of the corpus build the current lines came from —
+# the ingest timestamp for every probe-derived chunk's provenance record.
+_CORPUS_META = {'generated_at': None}
+
+
 def corpus(force=False):
     if not force and CACHE.exists() and time.time() - CACHE.stat().st_mtime < TTL:
         try:
-            return json.loads(CACHE.read_text())
+            data = json.loads(CACHE.read_text())
+            # wq#2430 cache v2 = {'generated_at': epoch, 'lines': [...]};
+            # v1 was a bare list — mtime is the best ingest time we have for it.
+            if isinstance(data, dict):
+                _CORPUS_META['generated_at'] = data.get('generated_at') or CACHE.stat().st_mtime
+                return data.get('lines') or []
+            _CORPUS_META['generated_at'] = CACHE.stat().st_mtime
+            return data
         except Exception:
             pass
     lines = []
@@ -180,9 +198,11 @@ def corpus(force=False):
         except Exception:
             continue
     lines = list(dict.fromkeys(lines))
+    _CORPUS_META['generated_at'] = time.time()
     if lines:
         try:
-            CACHE.write_text(json.dumps(lines))
+            CACHE.write_text(json.dumps({'generated_at': _CORPUS_META['generated_at'],
+                                         'lines': lines}))
         except Exception:
             pass
     return lines
@@ -226,6 +246,64 @@ def retrieve(answer_text, k=TOP_K):
         return [l for _, l in ranked[:k]]
     except Exception:
         return shortlist[:k]      # keyword fallback — never empty
+
+
+# wq#2430: provenance schema. Every retrieved chunk maps its source tag to the
+# URI it was probed from; [capability] lines override the corpus build time
+# with the card's own generation date (the one probe whose evidence genuinely
+# ages — everything else is re-probed each corpus build, <= FACTPACK_TTL old).
+_SOURCE_REFS = {
+    'service': 'cmd://systemctl list-units lumen-* minerva-*',
+    'model': 'file:///home/lumen/agent/litellm_config.yaml',
+    'fact': 'cmd:///home/lumen/minerva/lumen_state.py current',
+    'artifact': 'sqlite:///home/lumen/minerva/minerva.db',
+    'capability': f'file://{CARDS_PATH}',
+    'hw': 'cmd://lspci+lscpu',
+}
+_CARD_DATE_RE = re.compile(r'verified from source, (\d{4}-\d{2}-\d{2})')
+
+
+def tag_provenance(lines, generated_at=None):
+    """wq#2430: wrap retrieved chunk strings in the provenance contract:
+    {'text', 'source', 'source_ref', 'ingested_at' (UTC ISO), 'stale'}.
+    stale = ingested more than EVIDENCE_TTL seconds ago (0 disables)."""
+    now = time.time()
+    gen = generated_at or _CORPUS_META.get('generated_at') or now
+    out = []
+    for line in lines:
+        tag = line[1:line.find(']')] if line.startswith('[') and ']' in line else 'unknown'
+        ingested = gen
+        m = _CARD_DATE_RE.search(line)
+        if m:
+            try:
+                ingested = datetime.strptime(m.group(1), '%Y-%m-%d').replace(
+                    tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                pass
+        out.append({
+            'text': line,
+            'source': tag,
+            'source_ref': _SOURCE_REFS.get(tag, 'probe://unknown'),
+            'ingested_at': datetime.fromtimestamp(ingested, timezone.utc).isoformat(timespec='seconds'),
+            'stale': bool(EVIDENCE_TTL) and (now - ingested) > EVIDENCE_TTL,
+        })
+    return out
+
+
+def retrieve_evidence(answer_text, k=TOP_K):
+    """wq#2430: retrieve() with the provenance contract attached."""
+    return tag_provenance(retrieve(answer_text, k))
+
+
+def _evidence_key(text):
+    return hashlib.sha1(text.encode()).hexdigest()
+
+
+# wq#2430: provenance of the facts the most recent build_context() actually
+# included, keyed by the answer text's hash. minerva_verify picks this up when
+# its caller hands it a context built here but no explicit evidence list (the
+# live proposal path); the key check makes cross-answer leakage impossible.
+LAST_EVIDENCE = {'key': None, 'chunks': []}
 
 
 CLOSED_WORLD = (
@@ -289,7 +367,13 @@ def build_context(answer_text):
     exists" and the digest's GAPS section had been carrying those. Hybrid +
     closed-world fixes both directions. Falls back to digest alone on any error
     so the guard never sees less than the pre-factpack baseline.
+
+    wq#2430: on success, LAST_EVIDENCE records the provenance of exactly the
+    fact lines included in the returned context (keyed by answer hash) so the
+    verify path can apply its stale-evidence TTL gate without a caller change.
+    On the fallback path the key is left cleared — no facts, no gate.
     """
+    LAST_EVIDENCE['key'], LAST_EVIDENCE['chunks'] = None, []
     try:
         digest = judge_digest(DIGEST.read_text())
     except Exception:
@@ -315,6 +399,8 @@ def build_context(answer_text):
             if used + len(f) + 1 > room:
                 break
             body.append(f); used += len(f) + 1
+        LAST_EVIDENCE['chunks'] = tag_provenance(body)
+        LAST_EVIDENCE['key'] = _evidence_key(answer_text)
         return head + '\n'.join(body)
     except Exception:
         return digest
