@@ -70,13 +70,18 @@ class LifecycleValueError(StateGateError):
 class LifecycleClosedError(StateGateError):
     pass
 
-class PredicateNearDuplicate(StateGateError):
+class PredicateNearDuplicate(PredicateNotRegistered):
     """wq#1689: a brand-new predicate that is within edit-distance 2 of a
     predicate this same subject already carries. This is the supersession hole
     (thoth.ssh_status vs thoth.tailscale_ssh, gameboy.tailscale_ip vs ts_ip):
     a renamed/reformatted predicate never invalidates the old one because the
     two names don't match, so both stay open forever. A real rename should use
-    the existing owner predicate (or a state_registry.json alias), not a new one."""
+    the existing owner predicate (or a state_registry.json alias), not a new one.
+
+    wq#2054: subclasses PredicateNotRegistered because it is only reachable once
+    every registration check above has already missed the predicate -- a near
+    duplicate IS an unregistered predicate, refused for a more specific reason.
+    Unlike the plain case it is refused even with a --new-predicate reason."""
 
 class FactIdNull(StateGateError):
     """wq#1999: the open row for this (subject,predicate) has id IS NULL, so it
