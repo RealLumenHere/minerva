@@ -46,6 +46,28 @@ MIN_AGE_DAYS = int(os.getenv('DEFER_MIN_AGE_DAYS', '7'))
 STALE_DAYS = int(os.getenv('DEFER_STALE_DAYS', '45'))
 MAX_PROMPTS = int(os.getenv('DEFER_MAX_PROMPTS', '5'))
 PREFIX = 'minerva_defer_'
+# wq#2489: the verdict line is a contract (foreman harness/output_contract.py). Loaded by
+# path so a missing or broken foreman tree degrades to the inline regex instead of taking
+# the whole daily review down. A note is read in FULL: the verdict is written last.
+NOTE_READ_CAP = 200_000
+_CONTRACT_PATH = os.getenv('DEFER_OUTPUT_CONTRACT', '/home/lumen/foreman/harness/output_contract.py')
+
+
+def _load_contract():
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('output_contract', _CONTRACT_PATH)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules['output_contract'] = mod   # dataclasses resolve annotations through it
+        spec.loader.exec_module(mod)
+        return mod
+    except Exception as e:
+        sys.modules.pop('output_contract', None)
+        print(f'output_contract unavailable ({str(e)[:120]}); using the inline regex', file=sys.stderr)
+        return None
+
+
+_CONTRACT = _load_contract()
 
 # wq#1559 — pilot lane.
 PILOTS = Path(os.getenv('DEFER_PILOT_ROOT', '/home/lumen/foreman/pilots'))
@@ -351,7 +373,7 @@ def cmd_reap(dry=False):
             continue
         text = ''
         try:
-            text = note.read_text()[:6000]
+            text = note.read_text(errors='replace')[:NOTE_READ_CAP]
         except Exception:
             continue
         kind = 'pilot' if piloting else 'research'
@@ -415,7 +437,7 @@ def _requeue_formless(r, note, kind):
         # it researching, unmarked, so the next pass tries the re-run again.
         log(f'    re-run call failed — left researching, not retired')
         return
-    if not re.search(r'RECOMMENDATION:\s*(ADOPT|WATCH|SKIP)', text, re.I):
+    if _verdict_from(text)[0] == 'rerun':
         # Fail-closed at the producer: a formless answer is never written to the
         # note queue, so the reaper cannot mis-score what does not exist.
         _set(r['id'], 'rejected_aged',
@@ -509,18 +531,33 @@ def _find_note(pid):
     return None
 
 
+def _read_recommendation(text):
+    """(ADOPT|WATCH|SKIP, tail) or (None, ''). Contract module first, inline regex if it
+    could not be loaded."""
+    if _CONTRACT is not None:
+        res = _CONTRACT.parse_or_reask(text, _CONTRACT.Recommendation)
+        if res.status == 'ok':
+            return res.value.recommendation, res.tail
+        return None, ''
+    m = re.search(r'RECOMMENDATION:\s*(ADOPT|WATCH|SKIP)', text, re.I)
+    return (m.group(1).upper(), text[m.end():m.end() + 300]) if m else (None, '')
+
+
 def _verdict_from(text):
     """Deterministic read of the required RECOMMENDATION line.
 
     wq#1559: a missing line is NOT a verdict. It used to return rejected_aged, which
     retired 19 of 72 researched defers for a formatting miss the proposal's author
     never made. It now returns 'rerun' and the caller buys exactly one enforced
-    re-run before retiring."""
-    m = re.search(r'RECOMMENDATION:\s*(ADOPT|WATCH|SKIP)', text, re.I)
-    if not m:
+    re-run before retiring.
+
+    wq#2489: the misses were not formatting either. cmd_reap sliced the note to its
+    first 6000 chars and the line sits at the end of a 6-10k note, so 23 notes with a
+    valid verdict were scored formless. The caller now passes the whole note."""
+    v, tail = _read_recommendation(text)
+    if v is None:
         return 'rerun', 'no RECOMMENDATION line'
-    v = m.group(1).upper()
-    tail = text[m.end():m.end() + 300].strip().replace(chr(10), ' ')
+    tail = tail.strip().replace(chr(10), ' ')
     if v == 'ADOPT':
         return 'accept', 'research says ADOPT: ' + tail[:200]
     if v == 'WATCH':
