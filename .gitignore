@@ -56,3 +56,10 @@ lumen_state.txt
 proposals_decisions.log
 reports/familiarity_summary.json
 v4/reports/*_watch.csv
+
+# wq#2600: drift-plan deploy artifacts (wq#2434) -- source of truth is foreman
+# ops/wq2434-drift-plan/ (install.sh copies drift_plan.py here); drift_plans/*.json
+# are regenerated weekly by lumen-drift-plan.timer. Tracking either keeps the
+# primary tree permanently dirty, same class as wq#2190 above.
+drift_plan.py
+drift_plans/
