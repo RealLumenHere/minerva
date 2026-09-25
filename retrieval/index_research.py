@@ -10,6 +10,7 @@ from psycopg2.extras import execute_values
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from asserted_at import asserted_at as doc_asserted_at   # wq#1773
+from grounding_verdict import parse_header as doc_grounding   # wq#2066
 
 ROOT           = pathlib.Path(os.environ.get("LUMEN_RESEARCH_ROOT", "/home/lumen/scratch/research"))
 OLLAMA_URL     = "http://localhost:11434/api/embeddings"
@@ -117,15 +118,17 @@ def existing_hashes(conn):
 def upsert_batch(conn, rows):
     if not rows: return
     sql = """
-    INSERT INTO research_docs (filepath, filename, category, mtime, size_bytes, content, content_hash, embedding, asserted_at)
+    INSERT INTO research_docs (filepath, filename, category, mtime, size_bytes, content, content_hash, embedding, asserted_at,
+                               grounding_verdict, asserts_fleet_state)
     VALUES %s
     ON CONFLICT (filepath) DO UPDATE SET
       filename=EXCLUDED.filename, category=EXCLUDED.category, mtime=EXCLUDED.mtime,
       size_bytes=EXCLUDED.size_bytes, content=EXCLUDED.content, content_hash=EXCLUDED.content_hash,
-      embedding=EXCLUDED.embedding, indexed_at=now(), asserted_at=EXCLUDED.asserted_at;
+      embedding=EXCLUDED.embedding, indexed_at=now(), asserted_at=EXCLUDED.asserted_at,
+      grounding_verdict=EXCLUDED.grounding_verdict, asserts_fleet_state=EXCLUDED.asserts_fleet_state;
     """
     with conn.cursor() as cur:
-        execute_values(cur, sql, rows, template="(%s,%s,%s,%s,%s,%s,%s,%s,%s)")
+        execute_values(cur, sql, rows, template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)")
     conn.commit()
 
 def log_error(conn, fp, err):
@@ -194,7 +197,10 @@ def main():
             # mtime. Computed here, never from now()/indexed_at, so a re-index of an
             # old file does not make it read as fresh.
             batch.append((rel, fp.name, classify(fp.name), mtime, st.st_size, content, h, emb,
-                          doc_asserted_at(content, mtime)))
+                          doc_asserted_at(content, mtime),
+                          # wq#2066: the `grounding:` header fleet_grounding wrote; None (kept
+                          # in RAG) for a doc without one, which backfill assesses later.
+                          *doc_grounding(content)))
             new += 1
             if len(batch) >= BATCH_SIZE:
                 upsert_batch(conn, batch); batch.clear()
