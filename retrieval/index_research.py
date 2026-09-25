@@ -203,7 +203,18 @@ def main():
                           *doc_grounding(content)))
             new += 1
             if len(batch) >= BATCH_SIZE:
-                upsert_batch(conn, batch); batch.clear()
+                try:
+                    upsert_batch(conn, batch)
+                except Exception as e:
+                    log.exception("batch upsert failed")
+                    for row in batch:
+                        log_error(conn, row[0], f"batch-upsert-failed:{e}")
+                    err_c += len(batch); new -= len(batch)
+                finally:
+                    # wq#2555: clear unconditionally — a DB-side failure (e.g. the wq#2554
+                    # UndefinedColumn schema drift) must not leave the failing rows in
+                    # `batch` to be re-sent (and re-fail) on every later BATCH_SIZE tick.
+                    batch.clear()
                 el = time.time()-start
                 rate = (new+skipped)/max(el,1)
                 eta = (len(files)-i)/max(rate,0.01)
@@ -213,7 +224,19 @@ def main():
         except Exception as e:
             log.exception(f"unexpected on {fp}")
             log_error(conn, str(fp), f"exc:{e}"); err_c += 1
-    upsert_batch(conn, batch)
+    try:
+        upsert_batch(conn, batch)
+    except Exception as e:
+        # wq#2555: this final upsert (the tail batch, outside the for-loop) previously
+        # had no handler at all — an UndefinedColumn-class DB error here (wq#2554) raised
+        # uncaught, skipping conn.close() and the wq#309 chunk_reembed pass below even
+        # though every embedding in `batch` was already paid for.
+        log.exception("final batch upsert failed")
+        for row in batch:
+            log_error(conn, row[0], f"final-batch-upsert-failed:{e}")
+        err_c += len(batch); new -= len(batch)
+    finally:
+        batch.clear()
     log.info(f"DONE files={len(files)} new={new} skip={skipped} err={err_c} elapsed={(time.time()-start)/60:.1f}min")
     conn.close()
     # wq#309: chunk-level pass — research_chunks is the retrieval surface (tails embedded).
@@ -224,7 +247,10 @@ def main():
         chunk_reembed.main()
     except Exception as e:
         log.error(f"wq309 chunk pass failed (doc-level index unaffected): {e}")
-    return 0
+    # wq#2555: lumen-research-index.timer is oneshot with no Restart=, so a non-zero
+    # exit here is the only way a persistent failure (e.g. schema drift) shows up in
+    # journalctl instead of the timer silently reporting success every run.
+    return 1 if err_c else 0
 
 if __name__ == "__main__":
     sys.exit(main())
