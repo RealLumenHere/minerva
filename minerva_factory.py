@@ -698,12 +698,42 @@ def _verify_litellm_route(plan_row):
     return False, f'route {name} NOT in /v1/models response'
 
 def _verify_script_exists(plan_row):
-    """Check the script file exists and is syntactically valid."""
+    """Check the script file exists and is syntactically valid.
+
+    wq#2461 (closing wq#2434): GREEN new_standalone_script plans are auto-applied
+    by apply_new_standalone_script into SCRIPTS_DIR/<filename> — an inert staging
+    location (that applier's own docstring: "not wired"). RED ones are instead
+    applied BY HAND to the planner's declared target and never touch SCRIPTS_DIR
+    at all. wq#2434 hand-deployed /home/lumen/minerva/drift_plan.py, verified it
+    live via its own install.sh --verify, but this check only ever looked for
+    /home/lumen/factory/scripts/drift_plan.py and reported FAIL.
+
+    A declared target can live in either of two places depending on how the plan
+    was produced: the plans-table `targets` column (the schema's own field), or,
+    for some legacy plans, duplicated inside `params['targets']`. Check both,
+    preferring whichever declared path actually EXISTS on disk; fall back to the
+    SCRIPTS_DIR/filename auto-apply convention when none of them do. This keeps a
+    GREEN auto-applied plan verifying exactly as it did before: its own declared
+    targets describe an eventual/staged location that was never written to, so
+    they correctly don't exist and the check falls through to SCRIPTS_DIR — only
+    a genuinely hand-deployed target changes the outcome.
+    """
     params = json.loads(plan_row['params'] or '{}')
     fname = params.get('filename', '')
-    dest = SCRIPTS_DIR / fname
+    declared = []
+    if 'targets' in plan_row.keys():
+        declared += json.loads(plan_row['targets'] or '[]')
+    declared += params.get('targets') or []
+    dest = None
+    for t in declared:
+        if t and Path(t).exists():
+            dest = Path(t)
+            break
+    if dest is None:
+        dest = SCRIPTS_DIR / fname
     if not dest.exists():
-        return False, f'{dest} does not exist'
+        tried = ', '.join(str(x) for x in (declared + [str(SCRIPTS_DIR / fname)]))
+        return False, f'{dest} does not exist (tried: {tried})'
     if str(dest).endswith('.py'):
         rc, out = sh(f'python3 -m py_compile {shlex.quote(str(dest))}')
         if rc != 0:
