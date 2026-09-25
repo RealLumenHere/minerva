@@ -24,8 +24,10 @@ probes:
     subjects: known-in-store
     interval_days: 1
   fleet_inventory:
-    command: "fleet-inv get <subject>"
-    predicates: [lan_ip, ssh_user, power_plug]
+    # wq#2150: id kept (stored in fact_verifications.probe / verify_recipe). NOT `fleet-inv get`:
+    # fleet-inv reads these fields from state_facts, so it would confirm the store with itself.
+    command: "ssh <subject> ip -o -4 addr show; ssh -l <user> <subject> true"
+    predicates: [lan_ip, ssh_user]
     subjects: known-in-store
     interval_days: 1
   service_state:
@@ -39,17 +41,10 @@ probes:
     subjects: known-in-store
     interval_days: 7
   os_kernel:
-    # wq#1999: this probe only knows `uname`. It used to claim `*_version` too
-    # (and ollama_version by name), so every semantic-version fact it swept was
-    # "observed" as the kernel NAME -- `uname -s` -> "Linux" -- and superseded
-    # 12 real versions (netdata 2.11.0, ollama 0.32.6, dc 0.2.46, grafana
-    # 13.1.1) with the string "Linux". A probe must only claim predicates it
-    # can actually observe; probe_os_kernel now refuses anything else outright.
-    # Package versions need a per-package query and have no probe yet, so they
-    # are unswept (line 10: "no probe assigned is never swept") rather than
-    # wrongly swept.
-    command: "uname -r (kernel) / os-release PRETTY_NAME (os)"
-    predicates: [kernel, os]
+    # wq#2192: `uname -s` answered os/*_version with "Linux" and clobbered
+    # them; only the kernel release is observable here.
+    command: "uname -r"
+    predicates: [kernel]
     subjects: known-in-store
     interval_days: 7
   plug_map:
@@ -105,7 +100,6 @@ predicates:
   ollama_version:
     class: config
     closes_on_decommission: true
-    # wq#1999: no probe. os_kernel here meant `uname -s` -> "Linux".
   # Identity / hardware — a decommissioned Mac still has 64 GB. Stay open.
   role:
     class: identity
@@ -146,9 +140,6 @@ predicates:
   os:
     class: config
     closes_on_decommission: false
-    probe: os_kernel
-    verify_interval_days: 7
-    source_kind: observed
   kernel:
     class: config
     closes_on_decommission: false
@@ -156,11 +147,9 @@ predicates:
     verify_interval_days: 7
     source_kind: observed
   power_plug:
+    # wq#2150: no independent observation (plug-ctl labels are dated, fleet-inv's binding is declared)
     class: config
     closes_on_decommission: false
-    probe: fleet_inventory
-    verify_interval_days: 1
-    source_kind: observed
   powers_node:
     class: config
     closes_on_decommission: false
@@ -201,11 +190,6 @@ patterns:
   - match: "mcp_*"
     class: config
     closes_on_decommission: true
-  # wq#1999: deliberately NO probe. A semantic version needs a per-package
-  # query (`netdata -v`, `ollama --version`, ...); os_kernel only runs `uname`,
-  # so it reported "Linux" for every one of these. Unswept beats wrongly swept.
   - match: "*_version"
     class: config
     closes_on_decommission: true
-    verify_interval_days: 7
-    source_kind: observed
