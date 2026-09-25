@@ -65,6 +65,55 @@ def test_main_success_writes_ok_state(tmp_path, monkeypatch):
     assert (tmp_path / '.stamp.lumen-reflector').exists()
 
 
+def test_uncaught_exception_in_recent_episodes_overwrites_stale_ok(tmp_path, monkeypatch):
+    """wq#2596: the regression wq#2593 reproduced against b3259ca. A prior run
+    left status:ok; this run dies in a helper before reaching any of _run()'s
+    deliberate exits. Pre-fix the stale 'ok' survived, cron_deadman saw a
+    healthy unit, and the only remaining signal was 14-day stamp age."""
+    lr.write_run_state('ok', 'previous run: 3 actionable')
+    monkeypatch.setattr(lr, '_load_key', lambda: 'test-key')
+
+    def boom(n=lr.N_EPISODES):
+        raise RuntimeError('database is locked')
+    monkeypatch.setattr(lr, 'recent_episodes', boom)
+    monkeypatch.setattr(lr, 'alert', lambda msg: None)
+
+    with pytest.raises(RuntimeError, match='database is locked'):
+        lr.main()
+
+    assert _state(tmp_path)['status'] == 'error'
+    assert 'uncaught RuntimeError: database is locked' == _state(tmp_path)['detail']
+
+
+def test_uncaught_exception_alerts_and_reraises(tmp_path, monkeypatch):
+    """The crash must stay loud: ntfy fires like every other failure path, and
+    the exception propagates so systemd still sees a non-zero exit plus the
+    traceback in the journal."""
+    monkeypatch.setattr(lr, '_load_key', lambda: 'test-key')
+    monkeypatch.setattr(lr, 'call_llm', lambda prompt, key: (_ for _ in ()).throw(KeyError('choices')))
+    sent = []
+    monkeypatch.setattr(lr, 'alert', sent.append)
+
+    with pytest.raises(KeyError):
+        lr.main()
+
+    assert len(sent) == 1
+    assert 'uncaught KeyError' in sent[0]
+    assert _state(tmp_path)['status'] == 'error'
+
+
+def test_deliberate_sys_exit_state_is_not_relabelled(tmp_path, monkeypatch):
+    """SystemExit must pass through main()'s guard untouched: the no-key path
+    writes its own specific detail, and the guard must not overwrite it with a
+    generic 'uncaught SystemExit'."""
+    monkeypatch.setattr(lr, '_load_key', lambda: '')
+    monkeypatch.setattr(lr, 'alert', lambda msg: None)
+    with pytest.raises(SystemExit) as exc:
+        lr.main()
+    assert exc.value.code == 2
+    assert _state(tmp_path)['detail'] == 'no LITELLM_MASTER_KEY'
+
+
 def test_alert_failure_does_not_raise(monkeypatch, capsys):
     class BoomRequests:
         @staticmethod

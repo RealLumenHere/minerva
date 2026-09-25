@@ -243,6 +243,27 @@ def write_run_state(status, detail=''):
 
 
 def main():
+    """wq#2596: the guard, not the body. wq#2573 wired write_run_state() into
+    the three exit paths _run() takes deliberately (no-key, LLM error,
+    success), which left every *undeliberate* exit uncovered: recent_episodes()
+    does a bare sqlite3.connect() ('database is locked' is a routine failure),
+    _post() indexes r.json()['choices'][0]['message'] on faith, and OUT_DIR
+    .mkdir() can fail on a full disk. Any of those crashed the process with the
+    prior run's .state.lumen-reflector still reading status:ok, so
+    cron_deadman.py's immediate-page path saw nothing wrong and the unit fell
+    back to the 14-day stamp-age blind spot this was all filed to close.
+    SystemExit is a BaseException, so _run()'s own sys.exit() calls pass
+    through here untouched -- their state is already written."""
+    try:
+        _run()
+    except Exception as e:
+        write_run_state('error', f'uncaught {type(e).__name__}: {e}')
+        alert(f'lumen_reflector: crashed with uncaught {type(e).__name__}: {e} '
+              '(see journalctl -u lumen-reflector for the traceback).')
+        raise
+
+
+def _run():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     key = _load_key()
     if not key:
