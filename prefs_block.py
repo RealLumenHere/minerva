@@ -150,7 +150,7 @@ def _prior_open_tickets(db_path=WQ_DB):
 
 def _wq_add(title, detail, wq_bin=WQ_BIN):
     out = subprocess.run(
-        [wq_bin, 'add', '--lane', 'user', '--pri', 'p2', '--title', title,
+        [wq_bin, 'add', '--lane', 'user', '--pri', '2', '--title', title,
          '--detail', detail],
         capture_output=True, text=True, check=True).stdout
     m = re.search(r'added task (\d+)', out)
