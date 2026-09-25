@@ -205,6 +205,9 @@ def build_card(r):
         tpl = _CARD_FALLBACK
     for k, v in fields.items():
         tpl = tpl.replace('{{' + k + '}}', v)
+    sys.path.insert(0, '/home/lumen/foreman/harness')
+    import pilot_spec_author
+    tpl, spec = pilot_spec_author.fill_card(tpl, dict(r), pilot_spec_author.gateway_call())
     return tpl
 
 
