@@ -26,6 +26,18 @@ DREAM_DIR = ROOT / 'dream'
 OUT_DIR   = DREAM_DIR / 'reflections'
 ENV_FILE  = Path('/home/lumen/agent/.env')
 
+# wq#2573: this unit is Type=oneshot; ExecStartPost= (the wq#1658
+# `.stamp.<unit>` writer) never runs when ExecStart exits non-zero, so a
+# fail-loud exit here was invisible to cron_deadman.py's age-based staleness
+# check for up to 2x the weekly timer's cadence (14 days) — that gap, not a
+# bug in the fail-loud exit itself, is why the 2026-09-20 failure sat
+# unticketed for 5 days. Write our own liveness + status signal on every
+# exit path so cron_deadman.py (wq#2573 companion change) can page on a
+# reported failure immediately instead of waiting on stamp age.
+STAMP_DIR  = Path('/home/lumen/logs')
+RUN_STATE  = STAMP_DIR / '.state.lumen-reflector'
+RUN_STAMP  = STAMP_DIR / '.stamp.lumen-reflector'
+
 LITELLM_URL   = 'http://localhost:4000/v1/chat/completions'
 REFLECT_MODEL = os.getenv('REFLECT_MODEL', 'deepseek-v4-pro')
 N_EPISODES    = int(os.getenv('REFLECT_N_EPISODES', '15'))
@@ -207,14 +219,34 @@ def alert(msg):
         requests.post(NTFY_URL, data=msg.encode(),
                       headers={'Title': 'lumen_reflector FAILED', 'Priority': 'high', 'Tags': 'warning'},
                       timeout=5)
-    except Exception:
-        pass
+    except Exception as e:
+        # wq#2573: this used to be a bare `pass` — a down/misconfigured ntfy
+        # made the ONLY failure signal disappear with zero trace. Now at
+        # least journalctl -u lumen-reflector shows it, and write_run_state()
+        # below is a second, ntfy-independent channel for the deadman.
+        print(f'lumen_reflector: alert() failed to reach ntfy: {e}', file=sys.stderr)
+
+
+def write_run_state(status, detail=''):
+    """wq#2573: record status ('ok'|'error') for cron_deadman.py's
+    immediate-page path, and unconditionally refresh the liveness stamp that
+    ExecStartPost would have written on success -- see module docstring."""
+    try:
+        STAMP_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = RUN_STATE.with_suffix('.tmp')
+        tmp.write_text(json.dumps({'status': status, 'detail': str(detail)[:500],
+                                    'ts': datetime.now(timezone.utc).isoformat()}))
+        tmp.replace(RUN_STATE)
+        RUN_STAMP.touch()
+    except OSError as e:
+        print(f'lumen_reflector: write_run_state failed: {e}', file=sys.stderr)
 
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     key = _load_key()
     if not key:
+        write_run_state('error', 'no LITELLM_MASTER_KEY')
         alert('lumen_reflector: no LITELLM_MASTER_KEY; aborted (no report written).')
         print('FAIL: no LITELLM_MASTER_KEY', file=sys.stderr); sys.exit(2)
 
@@ -223,6 +255,7 @@ def main():
     lines, sections = growth()
     obj, err = call_llm(build_prompt(eps, dream, lines, sections), key)
     if err:
+        write_run_state('error', err)
         alert(f'lumen_reflector: LLM error ({err}) via {REFLECT_MODEL}; no report written (fail-loud).')
         print(f'FAIL: {err}', file=sys.stderr); sys.exit(1)
 
@@ -258,6 +291,7 @@ def main():
     js.write_text(json.dumps({'generated': stamp, 'model': REFLECT_MODEL,
                               'summary': obj.get('summary', ''),
                               'proposals': actionable, 'withheld': withheld}, indent=2))
+    write_run_state('ok', f'{len(actionable)} actionable, {len(withheld)} withheld')
     print(f'wrote {md}')
     print(f'  proposals: {len(actionable)} actionable, {len(withheld)} withheld(off-limits) | episodes_in: {len(eps)}')
 
