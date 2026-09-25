@@ -252,7 +252,14 @@ def _queue_pilot(r):
     try:
         out = subprocess.run(
             [WQ_BIN, 'add', '--lane', PILOT_LANE, '--pri', '2', '--title', title,
-             '--detail', _pilot_ticket_detail(r, card)],
+             '--detail', _pilot_ticket_detail(r, card),
+             # ISSUE-LOG #257/#265/#337/#369/#397/#430/#663/#666/#778 (wq#2688 session,
+             # 2026-09-25): every pilot names its node in the card ("Run on {{NODE}}")
+             # but the ticket carried no needs: tag, so fworker.resolve_exec_grant
+             # never minted a FOREMAN_GRANT_FILE and every `ssh <node>`/`fleet-exec run
+             # <node>` from the worker was denied (grant_missing_env / requires
+             # approval) -- documented as "the fix" at least 9 times and never wired in.
+             '--needs', f'ssh({PILOT_NODE})'],
             capture_output=True, text=True, timeout=60)
     except Exception as e:
         log(f'  PILOT {r["id"]} wq add failed ({e}) — left as defer, will retry')
