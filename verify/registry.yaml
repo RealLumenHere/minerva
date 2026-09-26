@@ -38,8 +38,17 @@ probes:
   node_storage:
     command: "lsblk -J + /proc/mdstat + dmidecode --type 17"
     predicates: [storage, storage_layout, ram]
+    # wq#1688: storage/storage_layout confirmed by stated disk SERIALS (never /dev name),
+    # size fallback for storage only; ram via sudo -n dmidecode; zram/loop never a disk.
     subjects: known-in-store
     interval_days: 7
+  node_identity:
+    # wq#1688: hardware (DMI system/board serial in the stored text) and nic/nic_config
+    # (every stated MAC present). Confirms or unknown; a free-text fact is never rewritten.
+    command: "sudo -n dmidecode -s system-serial-number / baseboard-serial-number + ip -o link"
+    predicates: [hardware, nic, nic_config]
+    subjects: known-in-store
+    interval_days: 30
   os_kernel:
     # wq#2192: `uname -s` answered os/*_version with "Linux" and clobbered
     # them; only the kernel release is observable here.
@@ -137,6 +146,23 @@ predicates:
   hardware:
     class: hardware
     closes_on_decommission: false
+    probe: node_identity
+    verify_interval_days: 30
+  nic:
+    class: hardware
+    closes_on_decommission: false
+    probe: node_identity
+    verify_interval_days: 30
+  nic_config:
+    class: hardware
+    closes_on_decommission: false
+    probe: node_identity
+    verify_interval_days: 30
+  storage_layout:
+    class: hardware
+    closes_on_decommission: false
+    probe: node_storage
+    verify_interval_days: 7
   os:
     class: config
     closes_on_decommission: false
