@@ -10,8 +10,48 @@ import json, os, sqlite3, subprocess, sys, time, urllib.request, urllib.error
 
 BASE = "http://127.0.0.1:8139"
 DB = "/home/lumen/minerva/minerva.db"
-AGENT = os.environ.get("WQ_AGENT", "mv4-w575-05322f")
+QUEUE_DB = "/home/lumen/agents/work-queue/queue.db"
 SRC = "wq#575"
+
+
+def _is_session(name):
+    try:
+        q = sqlite3.connect("file:%s?mode=ro" % QUEUE_DB, uri=True, timeout=5)
+        try:
+            return q.execute("SELECT 1 FROM agent_sessions WHERE session_id=?",
+                             (name,)).fetchone() is not None
+        finally:
+            q.close()
+    except Exception:
+        return False
+
+
+def _mint_session(base="mv4-drill"):
+    p = subprocess.run(["/home/lumen/bin/wq", "whoami", "--register", base, "--eval"],
+                       capture_output=True, text=True, timeout=60,
+                       env=dict(os.environ, WQ_AGENT=base))
+    for ln in (p.stdout or "").splitlines():
+        if ln.startswith("export WQ_AGENT="):
+            return ln.split("=", 1)[1].strip()
+    return None
+
+
+def drill_agent():
+    """wq#2901: whoever the accept drills speak as has to be a LIVE row in queue.db
+    agent_sessions, because `agent_registered()` is the first gate the write path
+    hits. Two ways the old hardcoded `mv4-w575-05322f` stopped being one: the wq#575
+    session it named was purged long ago, and under fworker the ambient WQ_AGENT is
+    `fworker-wq<N>`, a per-ticket identity that may only ever write about its own
+    ticket (D20). Either way 11 drills go red on identity alone, which says nothing
+    about what they test. Mint a session when the ambient name is unusable."""
+    amb = os.environ.get("WQ_AGENT", "")
+    if amb and not amb.startswith("fworker-wq") and _is_session(amb):
+        return amb, False
+    sid = _mint_session()
+    return (sid, True) if sid else (amb or "mv4-w575-05322f", False)
+
+
+AGENT, AGENT_MINTED = drill_agent()
 OPTOK = open("/home/lumen/.secrets/memoryd-operator.token").read().strip()
 R = {"drills": [], "started": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
 OUT = sys.argv[1] if len(sys.argv) > 1 else "/tmp/mv4-w575-05322f/drills.json"
@@ -416,11 +456,17 @@ def main3(allok):
     if not tid:
         allok &= rec("D20_fworker_attribution", False, "no fworker-claimed ticket in queue.db")
     else:
+        # The content carries the ticket and the run stamp because a repeat commit
+        # of identical content is deduplicated to the FIRST note's id (kernel.py
+        # content_sha256) — which returns 200 and that note's lane, so the second
+        # run of this drill graded a row written by the first one. A drill that
+        # reads a stale row cannot fail, and cannot pass honestly either.
         st, r, _ = call("/commit", {"kind": "session",
                                     "title": "wq575 drill: fleet-worker attribution",
                                     "content": "Committed under a per-ticket fworker identity "
                                                "to prove the lane is read out of the ticket "
-                                               "(wq#2901). Drill row.",
+                                               "(wq#2901). Drill row for wq#%s at %s."
+                                               % (tid, R["started"]),
                                     "source_ref": "wq#%s" % tid}, agent=holder)
         got_lane = None
         if r.get("id"):
@@ -444,6 +490,11 @@ if __name__ == "__main__":
     ok, gid = main()
     ok = main2(ok, gid)
     ok = main3(ok)
+    if AGENT_MINTED:
+        subprocess.run(["/home/lumen/bin/wq", "whoami", "--release", "--force"],
+                       capture_output=True, text=True, timeout=60,
+                       env=dict(os.environ, WQ_AGENT=AGENT))
+    R["agent"] = AGENT
     R["all_pass"] = bool(ok)
     R["finished"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     with open(OUT, "w") as fh:
