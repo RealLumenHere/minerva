@@ -135,17 +135,19 @@ def cosine(a, b):
 def _ensure_recall_fts():
     """Create the FTS5 virtual table for recall if missing."""
     conn = sqlite3.connect(DB)
-    # Check if FTS5 is available
-    try:
-        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(kind, content, ref, ts)")
-        conn.commit()
-    except sqlite3.OperationalError as e:
-        log(f'  FTS5 unavailable: {e}. Falling back to plain table.')
-        conn.execute('''CREATE TABLE IF NOT EXISTS recall_fts (
-            kind TEXT, content TEXT, ref TEXT, ts TEXT
-        )''')
-        conn.commit()
-    conn.close()
+    try:   # wq#2895: close on every exit path (runs in lumen-memoryd via search())
+        # Check if FTS5 is available
+        try:
+            conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(kind, content, ref, ts)")
+            conn.commit()
+        except sqlite3.OperationalError as e:
+            log(f'  FTS5 unavailable: {e}. Falling back to plain table.')
+            conn.execute('''CREATE TABLE IF NOT EXISTS recall_fts (
+                kind TEXT, content TEXT, ref TEXT, ts TEXT
+            )''')
+            conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------- Archival (cold, semantic) ----------
@@ -199,9 +201,11 @@ def embed_note(nid, title=None, content=None):
             f'repair (memory_embed_guard.py repairs; never store an empty blob)')
         return False
     conn = _connect()
-    conn.execute('UPDATE archival_notes SET embedding=? WHERE id=?', (emb.tobytes(), nid))
-    conn.commit()
-    conn.close()
+    try:   # wq#2895: a busy commit must not leave the UPDATE's write lock open
+        conn.execute('UPDATE archival_notes SET embedding=? WHERE id=?', (emb.tobytes(), nid))
+        conn.commit()
+    finally:
+        conn.close()   # close() rolls back an uncommitted transaction
     return True
 
 
@@ -356,18 +360,21 @@ def search(query, top_k=5, tiers=None):
                     'kind': kind, 'title': content[:80], 'content': content,
                     'ref': ref, 'ts': ts,
                 })
-        conn.close()
+        finally:
+            conn.close()
 
     # --- Archival tier: semantic embedding search ---
     if 'archival' in tiers:
         q_emb = embed(query)
         if q_emb is not None:
             conn = sqlite3.connect(DB)
-            rows = conn.execute(
-                'SELECT id, kind, title, content, embedding, tags, created_at, trust '
-                'FROM archival_notes WHERE id NOT IN (SELECT absorbed_id FROM note_merges)'
-            ).fetchall()
-            conn.close()
+            try:   # wq#2895
+                rows = conn.execute(
+                    'SELECT id, kind, title, content, embedding, tags, created_at, trust '
+                    'FROM archival_notes WHERE id NOT IN (SELECT absorbed_id FROM note_merges)'
+                ).fetchall()
+            finally:
+                conn.close()
             scored = []
             for nid, kind, title, content, emb_b, tags, ts, trust in rows:
                 note_emb = decode_embedding(emb_b, expect_dim=q_emb.shape[0])  # wq#465

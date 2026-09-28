@@ -338,10 +338,12 @@ def _wq_verdict(session_id):
         if not session_id or not os.path.exists(QUEUE_DB):
             return None
         con = sqlite3.connect('file:%s?mode=ro' % QUEUE_DB, uri=True, timeout=5)
-        rows = con.execute(
-            'SELECT status, count(*) FROM tasks WHERE claimed_by=? GROUP BY status',
-            (session_id,)).fetchall()
-        con.close()
+        try:   # wq#2895: close on every exit path
+            rows = con.execute(
+                'SELECT status, count(*) FROM tasks WHERE claimed_by=? GROUP BY status',
+                (session_id,)).fetchall()
+        finally:
+            con.close()
         st = {r[0]: r[1] for r in rows}
         if not st:
             return None

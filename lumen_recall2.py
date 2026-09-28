@@ -405,8 +405,20 @@ ARCHIVE_FILTER = os.environ.get('MEMORY_V4_ARCHIVE_FILTER', '0') == '1'
 
 
 def _search_v3_impl(query, top_k=10):
-    LAST_STATS.update(skipped_bad_emb=0, dense_scanned=0, failopen_v2=False)
+    # wq#2895: this runs INSIDE lumen-memoryd on every /recall. Before, any raise
+    # mid-query left the connection (and an un-reset SELECT holding SHARED) pinned
+    # by the traceback until GC -- the precondition that made memoryd's audit
+    # COMMIT go busy on 2026-09-28. Close on every exit; the core's own early
+    # conn.close() calls stay harmless (closing twice is a no-op).
     conn = sqlite3.connect(DB)
+    try:
+        return _search_v3_core(conn, query, top_k)
+    finally:
+        conn.close()
+
+
+def _search_v3_core(conn, query, top_k=10):
+    LAST_STATS.update(skipped_bad_emb=0, dense_scanned=0, failopen_v2=False)
     conn.row_factory = sqlite3.Row
     q_toks = _tokens(query)
     q_subjects = set(m.group(0) for m in _subjects_re(conn).finditer(query.lower()))

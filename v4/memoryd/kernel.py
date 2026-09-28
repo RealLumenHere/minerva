@@ -10,7 +10,7 @@ payload, and returns exactly one of accept / propose / reject / quarantine.
 Identity resolution is the daemon's job (§6.3) precisely so this file can be
 unit-tested against the live store in dry-run mode, writing nothing.
 """
-import hashlib, json, os, re, secrets, sqlite3, time
+import contextlib, hashlib, json, os, re, secrets, sqlite3, time
 from datetime import datetime, timezone
 
 DB_DEFAULT = "/home/lumen/minerva/minerva.db"
@@ -21,6 +21,23 @@ SCHEMA_VERSION = 1
 ORIGIN_RE = re.compile(r"^(operator|state-mirror|convo-learn|backfill|agent-lane:[a-z0-9-]+(:wq#\d+)?)$")
 SOURCE_REF_RE = re.compile(r"^(wq#\d+|session:[A-Za-z0-9._:-]+)$")
 TRUSTS = ("operator", "derived", "external")
+
+
+def _rollback_quiet(con):
+    """wq#2895: roll back if a transaction is open. Never raises -- it runs on
+    error paths where the original exception is the one that matters."""
+    try:
+        if con.in_transaction:
+            con.execute("ROLLBACK")
+    except Exception:
+        pass
+
+
+def _close(con):
+    """wq#2895: rollback-then-close. sqlite3_close_v2 would roll back anyway,
+    but the lock release is stated here instead of implied."""
+    _rollback_quiet(con)
+    con.close()
 
 
 def utcnow():
@@ -70,10 +87,45 @@ class Kernel:
         self._screens = [re.compile(p) for p in self.contract.get("screen", {}).get("injection_markers", [])]
 
     # ---- helpers ----------------------------------------------------------
+    # Busy-wait before SQLITE_BUSY. Class attribute so tests can shrink it; the
+    # live daemon keeps the historical 5s.
+    busy_timeout_s = 5.0
+
     def connect(self):
-        con = sqlite3.connect(self.db_path, timeout=5.0, isolation_level=None)
+        con = sqlite3.connect(self.db_path, timeout=self.busy_timeout_s, isolation_level=None)
         con.row_factory = sqlite3.Row
         return con
+
+    # wq#2895: the ONLY sanctioned way to open a write transaction outside this
+    # file. 2026-09-28 04:36Z the daemon's reject-audit did BEGIN IMMEDIATE,
+    # its COMMIT hit SQLITE_BUSY (a reader held SHARED past the busy timeout),
+    # `except Exception: pass` swallowed it, then _send() raised BrokenPipe and
+    # the exception chain pinned the handler frame -- and with it the open
+    # connection holding a PENDING lock. An idle daemon never ran cyclic GC, so
+    # every reader and writer on minerva.db was locked out for 35 min. Lock
+    # release must never depend on GC: tx() rolls back on ANY exit that is not a
+    # successful COMMIT (including a failed COMMIT) and always closes.
+    @contextlib.contextmanager
+    def tx(self):
+        con = self.connect()
+        try:
+            con.execute("BEGIN IMMEDIATE")
+            yield con
+            con.execute("COMMIT")
+        except BaseException:
+            _rollback_quiet(con)
+            raise
+        finally:
+            _close(con)
+
+    @contextlib.contextmanager
+    def ro(self):
+        """Read-only use: deterministic close even when a query raises."""
+        con = self.connect()
+        try:
+            yield con
+        finally:
+            _close(con)
 
     def lane_policy(self, lane, table):
         return (self.contract["lanes"].get(lane) or {}).get(table)
@@ -208,7 +260,7 @@ class Kernel:
             return d
         finally:
             if close:
-                con.close()
+                _close(con)
 
     def ticket_exists(self, tid):
         """queue.db's ticket table is `tasks` (verified live 2026-08-15, not
@@ -362,7 +414,7 @@ class Kernel:
                 pass
             raise
         finally:
-            con.close()
+            _close(con)
 
     # ---- §3.2 quarantine review surface (wq#610) --------------------------
     # wq#575 shipped GET /quarantine (list) but no way to act on a row -- design
@@ -417,7 +469,7 @@ class Kernel:
                           ("kind", "title", "content", "tags", "source_ref")}
             decision = self.validate_note(fresh_body, re_identity, con=con)
         finally:
-            con.close()
+            _close(con)
         if decision.verdict != "accept":
             return {"status": "not_released", "reverify_verdict": decision.verdict,
                     "reason": decision.reason, "invariant": decision.invariant}
@@ -433,7 +485,7 @@ class Kernel:
                        payload.get("source_ref"), detail="quarantine_id=%s" % quarantine_id)
             con.execute("COMMIT")
         finally:
-            con.close()
+            _close(con)
         return {"status": "released", "write_status": status, "id": rid, "audit_seq": seq}
 
     def discard(self, quarantine_id, identity, review_note=None):
@@ -460,7 +512,7 @@ class Kernel:
                        detail="discarded: %s" % (review_note or "no reason given"))
             con.execute("COMMIT")
         finally:
-            con.close()
+            _close(con)
         return {"status": "discarded", "id": quarantine_id}
 
     def revoke(self, note_id, reason, identity):
@@ -482,7 +534,7 @@ class Kernel:
                              before_sha=r["content_sha256"], detail=reason)
             con.execute("COMMIT")
         finally:
-            con.close()
+            _close(con)
         return {"status": "revoked", "id": note_id, "audit_seq": seq,
                 "consumers": self.consumers(note_id), "cascade": self.cascade(note_id)}
 
@@ -496,7 +548,7 @@ class Kernel:
                 "ORDER BY last_ts DESC", ("%" + note_id + "%",)).fetchall()
             return [dict(r) for r in rows]
         finally:
-            con.close()
+            _close(con)
 
     def cascade(self, note_id):
         """§4.3 depth-1 candidates only. Surfaced for operator decision, never auto-revoked."""
@@ -508,4 +560,4 @@ class Kernel:
                 "LIMIT 50", ("%" + note_id + "%", note_id, note_id)).fetchall()
             return [dict(r) for r in rows]
         finally:
-            con.close()
+            _close(con)

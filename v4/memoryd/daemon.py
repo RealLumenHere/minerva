@@ -180,15 +180,14 @@ class Handler(BaseHTTPRequestHandler):
             ident, ierr = self.resolve_identity(body, for_write=path not in ("/recall", "/precheck"))
             if ierr:
                 # unknown identity: reject, audit, return nothing (fail closed)
+                # wq#2895: K.tx() rolls back + closes on every exit (incl. a busy
+                # COMMIT); the audit stays fail-open but can no longer leak a lock.
                 try:
-                    con = K.connect()
-                    con.execute("BEGIN IMMEDIATE")
-                    K.audit(con, "reject", "archival_notes", None, None,
-                            body.get("source_ref"), detail="identity: " + ierr, invariant="I-4")
-                    con.execute("COMMIT")
-                    con.close()
-                except Exception:
-                    pass
+                    with K.tx() as con:
+                        K.audit(con, "reject", "archival_notes", None, None,
+                                body.get("source_ref"), detail="identity: " + ierr, invariant="I-4")
+                except Exception as e:
+                    sys.stderr.write("audit(reject/identity) failed (non-fatal): %s\n" % e)
                 return self._send(403, {"status": "reject", "reason": ierr})
             return fn(body, ident)
         except Exception as e:
@@ -207,14 +206,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _healthz(self):
         try:
-            con = K.connect()
-            counts = {
-                "archival_notes": con.execute("SELECT COUNT(*) FROM archival_notes").fetchone()[0],
-                "state_facts": con.execute("SELECT COUNT(*) FROM state_facts").fetchone()[0],
-                "memory_audit": con.execute("SELECT COUNT(*) FROM memory_audit").fetchone()[0],
-                "memory_quarantine": con.execute("SELECT COUNT(*) FROM memory_quarantine").fetchone()[0],
-            }
-            con.close()
+            with K.ro() as con:   # wq#2895: closed even when a COUNT raises
+                counts = {
+                    "archival_notes": con.execute("SELECT COUNT(*) FROM archival_notes").fetchone()[0],
+                    "state_facts": con.execute("SELECT COUNT(*) FROM state_facts").fetchone()[0],
+                    "memory_audit": con.execute("SELECT COUNT(*) FROM memory_audit").fetchone()[0],
+                    "memory_quarantine": con.execute("SELECT COUNT(*) FROM memory_quarantine").fetchone()[0],
+                }
             return self._send(200, {"status": "ok", "contract_sha256": K.contract_sha,
                                     "contract_version": K.contract["version"],
                                     "db": DB, "db_mtime": os.path.getmtime(DB),
@@ -231,11 +229,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             try:
-                con = K.connect(); con.execute("BEGIN IMMEDIATE")
-                K.audit(con, "reject", "archival_notes", None, ident, detail=why, invariant="I-9")
-                con.execute("COMMIT"); con.close()
-            except Exception:
-                pass
+                with K.tx() as con:
+                    K.audit(con, "reject", "archival_notes", None, ident, detail=why, invariant="I-9")
+            except Exception as e:
+                sys.stderr.write("audit(reject/rate-read) failed (non-fatal): %s\n" % e)
             return
         q = (body.get("query") or "").strip()
         if not q:
@@ -273,13 +270,13 @@ class Handler(BaseHTTPRequestHandler):
         ids = [h.get("id") for h in out]
         seq = None
         try:
-            con = K.connect(); con.execute("BEGIN IMMEDIATE")
-            # §3.1 / Q4: ONE audit row per query, hit ids in detail.
-            seq = K.audit(con, "read", "archival_notes", None, ident,
-                          body.get("source_ref"),
-                          detail=json.dumps({"q": q[:300], "hits": ids, "ms": engine_ms}))
-            con.execute("COMMIT"); con.close()
+            with K.tx() as con:
+                # §3.1 / Q4: ONE audit row per query, hit ids in detail.
+                seq = K.audit(con, "read", "archival_notes", None, ident,
+                              body.get("source_ref"),
+                              detail=json.dumps({"q": q[:300], "hits": ids, "ms": engine_ms}))
         except Exception as e:
+            seq = None   # wq#2895: a failed COMMIT rolled the row back; never report its seq
             sys.stderr.write("audit(read) failed (non-fatal): %s\n" % e)
         return self._send(200, {"status": "ok", "results": out, "engine_ms": engine_ms,
                                 "audit_seq": seq})
@@ -292,12 +289,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             try:
-                con = K.connect(); con.execute("BEGIN IMMEDIATE")
-                K.audit(con, "reject", "archival_notes", None, ident,
-                        body.get("source_ref"), detail=why, invariant="I-9")
-                con.execute("COMMIT"); con.close()
-            except Exception:
-                pass
+                with K.tx() as con:
+                    K.audit(con, "reject", "archival_notes", None, ident,
+                            body.get("source_ref"), detail=why, invariant="I-9")
+            except Exception as e:
+                sys.stderr.write("audit(reject/rate-write) failed (non-fatal): %s\n" % e)
             return
         d = K.validate_note(body, ident)
         status, rid, seq = K.apply(d, ident)
@@ -323,12 +319,11 @@ class Handler(BaseHTTPRequestHandler):
             verdict, eps = "precheck unavailable (fail-open)", []
             sys.stderr.write("precheck failed (fail-open): %s\n" % e)
         try:
-            con = K.connect(); con.execute("BEGIN IMMEDIATE")
-            K.audit(con, "read", "archival_notes", None, ident, body.get("source_ref"),
-                    detail=json.dumps({"precheck": plan[:300]}))
-            con.execute("COMMIT"); con.close()
-        except Exception:
-            pass
+            with K.tx() as con:
+                K.audit(con, "read", "archival_notes", None, ident, body.get("source_ref"),
+                        detail=json.dumps({"precheck": plan[:300]}))
+        except Exception as e:
+            sys.stderr.write("audit(precheck) failed (non-fatal): %s\n" % e)
         return self._send(200, {"status": "ok", "verdict": verdict, "episodes": eps})
 
     def _revoke(self, body, ident):
@@ -368,25 +363,19 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(code, result)
 
     def _audit(self):
-        con = K.connect()
-        try:
+        with K.ro() as con:
             rows = con.execute(
                 "SELECT seq,ts,action,table_name,row_id,lane,agent_id,trust,source_ref,"
                 "invariant,substr(detail,1,300) AS detail FROM memory_audit "
                 "ORDER BY seq DESC LIMIT 100").fetchall()
-            return self._send(200, {"status": "ok", "rows": [dict(r) for r in rows]})
-        finally:
-            con.close()
+        return self._send(200, {"status": "ok", "rows": [dict(r) for r in rows]})
 
     def _quarantine(self):
-        con = K.connect()
-        try:
+        with K.ro() as con:
             rows = con.execute(
                 "SELECT id,ts,table_name,lane,agent_id,trust,source_ref,reason,status "
                 "FROM memory_quarantine ORDER BY ts DESC LIMIT 100").fetchall()
-            return self._send(200, {"status": "ok", "rows": [dict(r) for r in rows]})
-        finally:
-            con.close()
+        return self._send(200, {"status": "ok", "rows": [dict(r) for r in rows]})
 
 
 def main():
