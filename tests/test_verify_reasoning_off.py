@@ -5,9 +5,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import minerva_verify as mv  # noqa: E402
 
 
-def test_cerebras_rungs_get_none():
+def test_cerebras_rungs_get_low():
+    # wq#2905: gpt-oss's chat template rejects 'none'; 'low' is its floor.
     for m in ('cerebras-oss-120b', 'cerebras-llama', 'cerebras-gptoss-pinned'):
-        assert mv._reasoning_off(m) == 'none'
+        assert mv._reasoning_off(m) == 'low'
 
 
 def test_other_rungs_keep_sentinel():
@@ -31,4 +32,4 @@ def test_judge_payload_uses_rung_value(monkeypatch):
     monkeypatch.setattr(mv.requests, 'post', fake_post)
     mv._judge_once(['a claim'], 'ctx', 'cerebras-oss-120b', '')
     mv._judge_once(['a claim'], 'ctx', 'deepseek-v4-flash', '')
-    assert seen == [('cerebras-oss-120b', 'none'), ('deepseek-v4-flash', 'disable')]
+    assert seen == [('cerebras-oss-120b', 'low'), ('deepseek-v4-flash', 'disable')]

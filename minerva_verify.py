@@ -38,16 +38,18 @@ JUDGE_MODEL_2 = os.getenv('VERIFY_JUDGE_MODEL_2', 'deepseek-v4-flash')
 
 
 def _reasoning_off(model):
-    """reasoning_effort value that turns hidden reasoning off for this rung.
+    """reasoning_effort value that keeps hidden reasoning smallest on this rung.
 
     'disable' is a LiteLLM sentinel: it maps to no reasoning on the deepseek and
     gemini rungs, but it goes out verbatim on the Cerebras OpenAI-compatible path,
-    where the provider validator only takes none/low/medium/high. On 2026-09-19 that
-    produced a stream of 400s on cerebras-oss-120b. The provider accepts it again
-    today, so this is defensive: 'none' is in the documented enum and gives the same
-    result (0 reasoning tokens, checked live).
+    where the provider validator only takes none/low/medium/high (400s on
+    2026-09-19). 'none' passes that validator but not the gpt-oss chat template
+    behind it: "Unsupported reasoning effort: none", 231 x 400 in 5 days, each one
+    falling back to qwen36-local (wq#2905). Every Cerebras rung is gpt-oss-120b,
+    which cannot turn reasoning off, so 'low' is the floor: 8 reasoning tokens
+    live against 22-28 with the param omitted (medium).
     """
-    return 'none' if str(model).startswith('cerebras') else 'disable'
+    return 'low' if str(model).startswith('cerebras') else 'disable'
 JUDGE_SAMPLES = int(os.getenv('VERIFY_JUDGE_SAMPLES', '3'))
 JUDGE_TEMP = float(os.getenv('VERIFY_JUDGE_TEMP', '0.3'))
 # wq#1501: per-call judge timeout. Was a hardcoded 40s; the local rung
