@@ -52,6 +52,7 @@ lanes:
   ops:          {archival_notes: write,   state_facts: propose, trust: derived}
   mailbot:      {archival_notes: write,   state_facts: propose, trust: derived}
   mission-control: {archival_notes: write, state_facts: propose, trust: derived}
+  nest:         {archival_notes: write,   state_facts: propose, trust: derived}
   foreman-tok:  {archival_notes: write,   state_facts: propose, trust: derived}
   foreman-auto: {archival_notes: write,   state_facts: propose, trust: derived}
   questfree:    {archival_notes: write,   state_facts: propose, trust: derived}

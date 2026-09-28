@@ -21,6 +21,11 @@ CONTRACT_DEFAULT = os.environ.get("MEMORYD_CONTRACT") or os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "schema", "memory_contract_v1.yaml")
 QUEUE_DB = "/home/lumen/agents/work-queue/queue.db"
+# wq#2901: the dispatcher's configured lane set, read for lane_drift only. A lane can
+# be configured before its first ticket exists, and that gap is precisely when a
+# missing contract row is cheapest to notice.
+DISPATCH_CONFIG = os.environ.get(
+    "MEMORYD_DISPATCH_CONFIG", "/home/lumen/foreman/dispatcher/config.json")
 SCHEMA_VERSION = 1
 
 ORIGIN_RE = re.compile(r"^(operator|state-mirror|convo-learn|backfill|agent-lane:[a-z0-9-]+(:wq#\d+)?)$")
@@ -329,17 +334,29 @@ class Kernel:
         """wq#2901: lanes `wq` dispatches that this contract has no row for. An
         unknown lane is a fail-closed reject (I-4), which is right -- but it was
         also SILENT, so `build` (1468 tickets) refused every episode for weeks.
-        Reported by /healthz and asserted empty by the drill battery."""
+        Reported by /healthz and asserted empty by the drill battery.
+
+        Two sources, because either alone leaves a blind spot: the lanes tickets
+        actually carry, and the lanes the dispatcher is CONFIGURED to accept. `nest`
+        was configured with no ticket filed yet, so a ticket-only check would have
+        stayed green until its first episode 403'd. Each source fails open on its
+        own -- an unreadable config must not hide the queue's drift."""
         known = set(self.contract.get("lanes") or {})
+        live = set()
         try:
             q = sqlite3.connect("file:%s?mode=ro" % self.queue_db, uri=True, timeout=3.0)
             try:
-                live = {r[0] for r in q.execute(
+                live |= {r[0] for r in q.execute(
                     "SELECT DISTINCT lane FROM tasks WHERE lane IS NOT NULL AND lane<>''")}
             finally:
                 q.close()
         except Exception:
-            return []
+            pass
+        try:
+            with open(DISPATCH_CONFIG) as fh:
+                live |= set(json.load(fh).get("lanes") or {})
+        except Exception:
+            pass
         return sorted(live - known)
 
     def agent_claims(self, agent_id):

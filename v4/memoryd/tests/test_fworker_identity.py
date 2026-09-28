@@ -170,3 +170,19 @@ def test_lane_drift_reports_lanes_with_no_contract_row(env):
     """The silence that let this run for eight days: `build` had no contract row and
     every write from it was refused with no signal anywhere."""
     assert env["daemon"].K.lane_drift() == ["no-such-lane"]
+
+
+def test_lane_drift_also_reads_the_dispatcher_config(env, tmp_path, monkeypatch):
+    """A lane can be CONFIGURED before its first ticket exists (`nest` was), so a
+    ticket-only check stays green until that lane's first episode 403s."""
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"lanes": {"build": {}, "not-yet-ticketed": {}}}))
+    monkeypatch.setattr(sys.modules["kernel"], "DISPATCH_CONFIG", str(cfg))
+    assert env["daemon"].K.lane_drift() == ["no-such-lane", "not-yet-ticketed"]
+
+
+def test_lane_drift_fails_open_on_an_unreadable_config(env, tmp_path, monkeypatch):
+    """An unreadable config must not hide the queue's own drift."""
+    monkeypatch.setattr(sys.modules["kernel"], "DISPATCH_CONFIG",
+                        str(tmp_path / "absent.json"))
+    assert env["daemon"].K.lane_drift() == ["no-such-lane"]
