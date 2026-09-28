@@ -156,10 +156,11 @@ def orphan_check():
     with db() as c:
         a = c.execute(
             "SELECT COUNT(*) FROM archival_notes n WHERE n.schema_version=1 AND NOT EXISTS "
-            "(SELECT 1 FROM memory_audit m WHERE m.row_id=n.id AND m.action='write')").fetchone()[0]
+            "(SELECT 1 FROM memory_audit m WHERE m.row_id=n.id AND m.action='write' "
+            "AND m.table_name='archival_notes')").fetchone()[0]
         b = c.execute(
             "SELECT COUNT(*) FROM memory_audit m WHERE m.action='write' AND m.row_id IS NOT NULL "
-            "AND m.detail NOT LIKE '%no-op%' AND NOT EXISTS "
+            "AND m.table_name='archival_notes' AND m.detail NOT LIKE '%no-op%' AND NOT EXISTS "
             "(SELECT 1 FROM archival_notes n WHERE n.id=m.row_id)").fetchone()[0]
     return a, b
 
