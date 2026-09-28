@@ -307,12 +307,40 @@ def cerebras_gen(prompt, retries=3):
     return ''
 
 
+# wq#2027: proposals ff80d5e94515 / 37cb4ce26a9b were generated from a repo
+# TITLE only — classified_intel.url and .summary were both empty, so the
+# "orchestration patterns" / "memory + skills" claims the judge scored 1.00
+# were the classifier's own HINT text, never a fact about the repo. A row
+# with no fetched source cannot ground a claim about its subject, so it must
+# not be eligible to seed a proposal at all — source-grounding (verify(),
+# source_grounding_check()) has nothing to check a claim against otherwise.
+def _ensure_intel_source_columns(conn):
+    """Additive migration: `summary` may not exist yet on older DBs (mirrors
+    minerva_verify._ensure_judge_ms_column). `url` already exists (wq#1500
+    schema)."""
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(classified_intel)')}
+    if 'summary' not in cols:
+        conn.execute('ALTER TABLE classified_intel ADD COLUMN summary TEXT')
+        conn.commit()
+
+
 def get_candidates(min_self=0.6, limit=10):
     conn = sqlite3.connect(DB)
+    _ensure_intel_source_columns(conn)
+    n_ineligible = conn.execute(
+        '''SELECT count(*) FROM classified_intel
+           WHERE self_relevance >= ? AND processed = 0
+             AND (url IS NULL OR trim(url) = '' OR summary IS NULL OR trim(summary) = '')''',
+        (min_self,)).fetchone()[0]
+    if n_ineligible:
+        log(f'  {n_ineligible} eligible-by-score row(s) skipped: no fetched url/summary '
+            f'(wq#2027 source-grounding gate — classifier must fetch source before these seed a proposal)')
     rows = conn.execute(
         '''SELECT id, source, title, reasoning, category, self_relevance, audience_relevance, summary, url
            FROM classified_intel
            WHERE self_relevance >= ? AND processed = 0
+             AND url IS NOT NULL AND trim(url) != ''
+             AND summary IS NOT NULL AND trim(summary) != ''
            ORDER BY self_relevance DESC, audience_relevance DESC
            LIMIT ?''', (min_self, limit)).fetchall()
     conn.close()
@@ -520,8 +548,15 @@ def run(min_self=0.6, limit=10):
         except Exception as _fpe:
             log(f'  factpack unavailable ({_fpe}) — falling back to static digest')
             _verify_ctx = LUMEN_STATE
+        # wq#2027: subject-grounding — checks the proposal's claims about the
+        # EXTERNAL subject (title/proposed_change) against the classifier's
+        # fetched url/summary, not against Lumen CONTEXT (which is all the
+        # checks above this one can see). get_candidates() already guarantees
+        # url/summary are non-empty for every row reaching this point.
         v = verify(answer_to_verify, _verify_ctx,
-                   subject=f'proposal:{str(title)[:40]}', model=MODEL, mode='semantic')
+                   subject=f'proposal:{str(title)[:40]}', model=MODEL, mode='semantic',
+                   source_url=url, source_summary=summary,
+                   subject_claim_text=f"{obj.get('title','')} {obj.get('proposed_change','')}"[:1500])
         if not v['passed']:
             log(f'  REJECT [{intel_id[:8]}] {str(title)[:50]} - hallucination guard failed ({v.get("reason")})')
             mark_processed(intel_id)
