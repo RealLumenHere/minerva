@@ -56,6 +56,24 @@ def audit_count():
         return c.execute("SELECT COUNT(*) FROM memory_audit").fetchone()[0]
 
 
+def fworker_example():
+    """wq#2901: the newest ticket whose claimed_by IS its own per-ticket fworker
+    identity -> (id, holder, lane). Derived from queue.db rather than hardcoded, so
+    the drill keeps working after this ticket is ancient history."""
+    try:
+        q = sqlite3.connect("file:/home/lumen/agents/work-queue/queue.db?mode=ro",
+                            uri=True, timeout=5)
+        try:
+            r = q.execute("SELECT id, claimed_by, lane FROM tasks WHERE "
+                          "claimed_by = 'fworker-wq' || id AND lane IS NOT NULL "
+                          "ORDER BY id DESC LIMIT 1").fetchone()
+        finally:
+            q.close()
+    except Exception:
+        return None, None, None
+    return (str(r[0]), r[1], r[2]) if r else (None, None, None)
+
+
 def orphan_check():
     """Invariant from §1.4: an accepted write with no audit row is impossible,
     and an audit 'write' row with no note is impossible. Returns (notes_without_audit,
@@ -382,6 +400,43 @@ def main3(allok):
               if "'operator'" in ln and ("INSERT" in ln.upper() or "UPDATE" in ln.upper())]
     allok &= rec("D18_no_auto_promote_paths", not bad and not forced,
                  "prose/instinct targets=%s forced-operator-writes=%s" % (bad, forced))
+
+    # D19 lane drift (wq#2901) — every lane wq dispatches must have a contract row
+    # Unknown lane is a fail-closed reject and always was; the defect was silence.
+    # `build` had no row for weeks, so 1070 tickets' episodes were refused unheard.
+    st, h, _ = call("/healthz", method="GET")
+    drift = h.get("lane_drift")
+    allok &= rec("D19_no_lane_drift", st == 200 and drift == [],
+                 "lanes in queue.db with no contract row: %s" % (drift,))
+
+    # D20 fleet-worker attribution (wq#2901) — paired, and the negative half uses a
+    # ticket the identity does NOT hold, i.e. an input from outside the population
+    # the fix was designed around (wq#2630).
+    tid, holder, lane = fworker_example()
+    if not tid:
+        allok &= rec("D20_fworker_attribution", False, "no fworker-claimed ticket in queue.db")
+    else:
+        st, r, _ = call("/commit", {"kind": "session",
+                                    "title": "wq575 drill: fleet-worker attribution",
+                                    "content": "Committed under a per-ticket fworker identity "
+                                               "to prove the lane is read out of the ticket "
+                                               "(wq#2901). Drill row.",
+                                    "source_ref": "wq#%s" % tid}, agent=holder)
+        got_lane = None
+        if r.get("id"):
+            with db() as c:
+                row = c.execute("SELECT lane FROM archival_notes WHERE id=?", (r["id"],)).fetchone()
+                got_lane = row[0] if row else None
+        # same well-formed shape, a ticket it does not hold -> still refused
+        other = "fworker-wq%d" % (int(tid) + 1)
+        stn, rn, _ = call("/commit", {"kind": "session", "title": "wq575 drill: foreign claim",
+                                      "content": "Must be refused: this identity holds no claim "
+                                                 "on the ticket it names.",
+                                      "source_ref": "wq#%s" % tid}, agent=other)
+        allok &= rec("D20_fworker_attribution",
+                     st in (200, 201) and got_lane == lane and stn == 403,
+                     "accept http=%s lane=%s (ticket lane=%s) | foreign-claim http=%s reason=%s"
+                     % (st, got_lane, lane, stn, str(rn.get("reason"))[:70]))
     return allok
 
 

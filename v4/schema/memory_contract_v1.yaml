@@ -37,6 +37,35 @@ lanes:
   dream:        {archival_notes: propose, state_facts: propose, trust: derived}
   state-mirror: {archival_notes: write,   state_facts: write,   trust: derived}
   convo-learn:  {archival_notes: write,   state_facts: reject,  trust: external}
+  # wq#2901: the rest of the lanes `wq` actually dispatches. Absent from this
+  # table they were a fail-closed reject (I-4), so every fleet-worker episode on
+  # them was refused — `build` alone is 1468 tickets. Standard agent-lane policy:
+  # notes are theirs to write, facts go to the proposal queue, trust is derived
+  # from the ticket. /healthz `lane_drift` names the next lane that appears in
+  # queue.db without a row here, so the silence does not come back.
+  build:        {archival_notes: write,   state_facts: propose, trust: derived}
+  fleet-fires:  {archival_notes: write,   state_facts: propose, trust: derived}
+  fleet-safety: {archival_notes: write,   state_facts: propose, trust: derived}
+  fleet-spend:  {archival_notes: write,   state_facts: propose, trust: derived}
+  pilot:        {archival_notes: write,   state_facts: propose, trust: derived}
+  pstack:       {archival_notes: write,   state_facts: propose, trust: derived}
+  ops:          {archival_notes: write,   state_facts: propose, trust: derived}
+  mailbot:      {archival_notes: write,   state_facts: propose, trust: derived}
+  mission-control: {archival_notes: write, state_facts: propose, trust: derived}
+  foreman-tok:  {archival_notes: write,   state_facts: propose, trust: derived}
+  foreman-auto: {archival_notes: write,   state_facts: propose, trust: derived}
+  questfree:    {archival_notes: write,   state_facts: propose, trust: derived}
+  questfree-root: {archival_notes: write, state_facts: propose, trust: derived}
+  simpill:      {archival_notes: write,   state_facts: propose, trust: derived}
+  t1:           {archival_notes: write,   state_facts: propose, trust: derived}
+  user-projects: {archival_notes: write,  state_facts: propose, trust: derived}
+  # frank-* lanes are Frank's own queues (hardware, credentials, funding,
+  # reverse-engineering). A worker episode about one is still ordinary fleet work
+  # and gets the ordinary policy; the `user` lane below keeps its older reject.
+  frank-hw:     {archival_notes: write,   state_facts: propose, trust: derived}
+  frank-re:     {archival_notes: write,   state_facts: propose, trust: derived}
+  frank-cred:   {archival_notes: write,   state_facts: propose, trust: derived}
+  frank-funding: {archival_notes: write,  state_facts: propose, trust: derived}
   # A registered agent session with no held wq claim. READS ONLY: reads are
   # less dangerous than writes (§2.5) and blocking them would starve every
   # lane prompt, which is the one thing _memory_context must never do. Writes

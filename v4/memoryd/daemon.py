@@ -13,10 +13,16 @@ import json, os, sys, threading, time, hashlib
 from collections import deque, defaultdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-sys.path.insert(0, "/home/lumen/minerva/v4/memoryd")
-sys.path.insert(0, "/home/lumen/minerva")
+# wq#2901: relative to this file, not the deployed path. Identical when the daemon
+# runs from /home/lumen/minerva, but it lets the tests import the kernel and the
+# contract from the checkout under test instead of silently exercising the live ones.
+_MEMORYD_DIR = os.path.dirname(os.path.abspath(__file__))
+_MINERVA_ROOT = os.path.dirname(os.path.dirname(_MEMORYD_DIR))
+sys.path.insert(0, _MEMORYD_DIR)
+sys.path.insert(0, _MINERVA_ROOT)
 
-from kernel import Kernel, Identity, utcnow, sha256   # noqa: E402
+from kernel import (Kernel, Identity, utcnow, sha256,   # noqa: E402
+                    FWORKER_IDENTITY_RE)
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("MEMORYD_PORT", "8139"))
@@ -103,6 +109,34 @@ class Handler(BaseHTTPRequestHandler):
         agent = (self.headers.get("X-Memoryd-Agent") or "").strip()
         if not agent:
             return None, "no identity: X-Memoryd-Agent missing (fail closed)"
+
+        # FLEET-WORKER identity (wq#2901): a per-ticket `fworker-wq<N>` name is
+        # never in agent_sessions, and must not be -- `wq holder_is_dead` reads
+        # that absence as half of its liveness signal, so registering fworkers
+        # would break `wq release --dead-worker`. Attribution comes from the claim
+        # RECEIPT instead: the identity names its own ticket, the ticket's
+        # claimed_by names the identity back, and the lane is still read out of
+        # the ticket. Narrower than a session identity -- one agent, one ticket,
+        # one lane -- and a writer cannot set claimed_by for itself.
+        # Design: v4/research/fworker_lane_attribution.md D1.
+        fw = FWORKER_IDENTITY_RE.match(agent)
+        if fw:
+            tid = fw.group(1)
+            src = (body.get("source_ref") or "").strip()
+            if src == "wq#" + tid and K.ticket_claimant(tid) == agent:
+                lane = K.ticket_lane(tid)
+                if not lane:
+                    return None, "cannot resolve lane for wq#%s" % tid
+                return Identity(lane, agent, None, claims={tid}), None
+            if not for_write:
+                # §2.5: reads are the lesser risk and blocking them would starve
+                # the lane prompt. agent_id is still audited on every read.
+                return Identity("unattributed", agent, None), None
+            if src != "wq#" + tid:
+                return None, ("fleet worker %s must write with source_ref=wq#%s, not %r"
+                              " (I-7)" % (agent, tid, src[:60]))
+            return None, "agent does not hold the claim on wq#%s" % tid
+
         if not K.agent_registered(agent):
             return None, "agent %r is not in the wq session registry" % agent[:60]
 
@@ -217,7 +251,11 @@ class Handler(BaseHTTPRequestHandler):
                                     "contract_version": K.contract["version"],
                                     "db": DB, "db_mtime": os.path.getmtime(DB),
                                     "uptime_s": round(time.time() - STARTED, 1),
-                                    "counts": counts})
+                                    "counts": counts,
+                                    # wq#2901: non-empty means some lane wq is
+                                    # dispatching has no contract row, so every
+                                    # write from it is refused -- loudly now.
+                                    "lane_drift": K.lane_drift()})
         except Exception as e:
             return self._send(500, {"status": "unhealthy", "reason": str(e)[:200]})
 

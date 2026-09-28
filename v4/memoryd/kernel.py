@@ -14,12 +14,22 @@ import contextlib, hashlib, json, os, re, secrets, sqlite3, time
 from datetime import datetime, timezone
 
 DB_DEFAULT = "/home/lumen/minerva/minerva.db"
-CONTRACT_DEFAULT = "/home/lumen/minerva/v4/schema/memory_contract_v1.yaml"
+# wq#2901: resolved from this file, not hardcoded to the deployed path, so the
+# kernel under test reads the contract from the SAME checkout as the code -- a
+# worktree that edits the contract otherwise validates against the live one.
+CONTRACT_DEFAULT = os.environ.get("MEMORYD_CONTRACT") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "schema", "memory_contract_v1.yaml")
 QUEUE_DB = "/home/lumen/agents/work-queue/queue.db"
 SCHEMA_VERSION = 1
 
 ORIGIN_RE = re.compile(r"^(operator|state-mirror|convo-learn|backfill|agent-lane:[a-z0-9-]+(:wq#\d+)?)$")
 SOURCE_REF_RE = re.compile(r"^(wq#\d+|session:[A-Za-z0-9._:-]+)$")
+# wq#2901: the per-ticket fleet-worker identity fworker mints (foreman
+# harness/fworker.py wq_identity). Mirrors wq's own WQ_FWORKER_IDENTITY_RE so the
+# shape is env-overridable in one style rather than two.
+FWORKER_IDENTITY_RE = re.compile(
+    os.environ.get("MEMORYD_FWORKER_IDENTITY_RE", r"^fworker-wq(\d+)$"))
 TRUSTS = ("operator", "derived", "external")
 
 
@@ -297,6 +307,40 @@ class Kernel:
                 q.close()
         except Exception:
             return None
+
+    def ticket_claimant(self, tid):
+        """wq#2901: who claimed ticket N, at ANY status. agent_claims() answers the
+        live-lease question; this answers the provenance one, which is the only one
+        a fleet worker can satisfy -- fworker commits its episode after the agent
+        inside it already ran `wq done`, so the claim is closed by then. claimed_by
+        survives the close and is written only by `wq claim`
+        (v4/research/fworker_lane_attribution.md §2, D1)."""
+        try:
+            q = sqlite3.connect("file:%s?mode=ro" % self.queue_db, uri=True, timeout=3.0)
+            try:
+                r = q.execute("SELECT claimed_by FROM tasks WHERE id=?", (tid,)).fetchone()
+                return r[0] if r else None
+            finally:
+                q.close()
+        except Exception:
+            return None
+
+    def lane_drift(self):
+        """wq#2901: lanes `wq` dispatches that this contract has no row for. An
+        unknown lane is a fail-closed reject (I-4), which is right -- but it was
+        also SILENT, so `build` (1468 tickets) refused every episode for weeks.
+        Reported by /healthz and asserted empty by the drill battery."""
+        known = set(self.contract.get("lanes") or {})
+        try:
+            q = sqlite3.connect("file:%s?mode=ro" % self.queue_db, uri=True, timeout=3.0)
+            try:
+                live = {r[0] for r in q.execute(
+                    "SELECT DISTINCT lane FROM tasks WHERE lane IS NOT NULL AND lane<>''")}
+            finally:
+                q.close()
+        except Exception:
+            return []
+        return sorted(live - known)
 
     def agent_claims(self, agent_id):
         """Tickets this session currently holds (claimed + live lease)."""

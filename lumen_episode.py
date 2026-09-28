@@ -37,6 +37,74 @@ FAILURE_KINDS = {'failure', 'lesson', 'bug', 'pathology', 'outage'}
 MEMORYD_URL = os.environ.get('MEMORYD_URL', 'http://127.0.0.1:8139')
 MEMORYD_TIMEOUT = float(os.environ.get('MEMORYD_TIMEOUT', '4'))
 
+CONTRACT_PATH = os.environ.get(
+    'MEMORYD_CONTRACT', '/home/lumen/minerva/v4/schema/memory_contract_v1.yaml')
+MEMORYD_REJECT_MARKER = '/home/lumen/minerva/logs/memoryd_reject.json'
+
+# wq#2901 I-4: --kind took any string while memoryd enforces a closed set, so
+# `verify`, `investigation` and `bugfix` each became a 422 the caller never saw --
+# the note went to the fallback and lost its lane. Known synonyms map; anything
+# else is a loud CLI error instead of a silent downgrade.
+KIND_ALIASES = {
+    'verify': 'audit', 'verification': 'audit', 'audit-trail': 'audit',
+    'investigation': 'analysis', 'triage': 'analysis',
+    'bugfix': 'fix', 'bug-fix': 'fix', 'bug': 'fix',
+    'postmortem': 'lesson', 'post-mortem': 'lesson',
+}
+
+
+def contract_kinds():
+    """The closed `kind` set the daemon enforces, read from the contract it pins.
+    Returns None when the contract is unreadable -- the CLI must not become a new
+    way for an episode commit to die (fail open)."""
+    try:
+        import yaml
+        with open(CONTRACT_PATH) as fh:
+            c = yaml.safe_load(fh)
+        kinds = c['tables']['archival_notes']['enums']['kind']
+        return list(kinds) or None
+    except Exception:
+        return None
+
+
+def resolve_kind(kind):
+    """(kind, error). Maps a known synonym onto the contract vocabulary; returns an
+    error string for a kind memoryd would refuse, so the caller learns at the CLI."""
+    allowed = contract_kinds()
+    if allowed is None:
+        return kind, None
+    if kind in allowed:
+        return kind, None
+    mapped = KIND_ALIASES.get((kind or '').strip().lower())
+    if mapped and mapped in allowed:
+        return mapped, None
+    return kind, ('kind %r is not in the memory contract; allowed: %s'
+                  % (kind, ', '.join(sorted(allowed))))
+
+
+def _breadcrumb_memoryd_reject(reason, agent, ref):
+    """wq#2901: a refusal of a write that SHOULD have been accepted -- we had an
+    agent id and a wq#N ref -- is the signal that the governed path is broken. It
+    ran 400-2600/day for eight days behind a silent fallback. Same marker-file
+    shape and guard-timer pattern as V3_FAIL_MARKER. Never raises."""
+    try:
+        from datetime import datetime, timezone
+        prev = {}
+        if os.path.exists(MEMORYD_REJECT_MARKER):
+            try:
+                with open(MEMORYD_REJECT_MARKER) as f:
+                    prev = json.load(f)
+            except Exception:
+                prev = {}
+        os.makedirs(os.path.dirname(MEMORYD_REJECT_MARKER), exist_ok=True)
+        with open(MEMORYD_REJECT_MARKER, 'w') as f:
+            json.dump({'last_reason': str(reason)[:300], 'last_agent': str(agent)[:80],
+                       'last_ref': str(ref)[:120],
+                       'last_ts': datetime.now(timezone.utc).isoformat(),
+                       'count': int(prev.get('count', 0)) + 1}, f)
+    except Exception:
+        pass
+
 
 def _memoryd_commit(kind, title, content, tags, source_ref):
     """POST the note to memoryd (wq#1634 / §4.5). Returns (note_id, None) when the
@@ -89,6 +157,13 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
     # terse recall-tier event so FTS keyword search finds it fast
     ev_text = f'{summary} :: changed={"; ".join(changed or [])} :: failed={fail_str} :: {why}'[:3500]
     nid, fell_back = _memoryd_commit(kind, summary[:200], content, tags, session_ref)
+    invariant = 'wq1634-fail-open'
+    if nid is None and str(session_ref).startswith('wq#') and minerva_audit.agent_id():
+        # wq#2901: an identified, ticket-referenced write that memoryd still refused
+        # is a governed-path defect, not the ordinary unattributed-CLI case. Label it
+        # so one SELECT can count it, and leave a breadcrumb the guard timer alarms on.
+        invariant = 'wq2901-memoryd-reject'
+        _breadcrumb_memoryd_reject(fell_back, minerva_audit.agent_id(), session_ref)
     if nid is None:
         # wq#2772: archival row + audit row + recall_fts event in ONE transaction,
         # committed BEFORE the .md and BEFORE the embed, then read back. Raises
@@ -98,7 +173,7 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
             audit={'action': minerva_audit.WRITE, 'source_ref': session_ref,
                    'detail': f'lumen_episode.commit fallback ({fell_back}) kind={kind}',
                    'source_kind': minerva_audit.resolve_source_kind(stated_by_frank),
-                   'invariant': 'wq1634-fail-open'},
+                   'invariant': invariant},
             recall_event=(kind, ev_text, session_ref or None), embed_now=False)
     else:
         rowid = mm.log_event(kind, ev_text, ref=session_ref or nid)
@@ -268,12 +343,19 @@ def _main():
             print(_fmt(h))
     elif a.cmd == 'commit':
         sp = lambda s: [x.strip() for x in s.replace(';', ',').split(',') if x.strip()]
+        # wq#2901 I-4: refuse a kind memoryd would 422 on, here, where the caller
+        # can read the message -- rather than after a silent fall back to an
+        # unattributed write.
+        kind, kind_err = resolve_kind(a.kind)
+        if kind_err:
+            print(f'lumen_episode: {kind_err}', file=sys.stderr, flush=True)
+            sys.exit(2)
         # wq#2772: FAIL LOUD. Exit 3 + stderr when the row or its FTS event is not
         # in minerva.db; the "committed" line is printed only after read-back, and
         # BEFORE the embed, so a caller timeout during embed still saw the truth.
         try:
             nid = commit(a.summary, changed=sp(a.changed), worked=sp(a.worked),
-                         failed=sp(a.failed), why=a.why, kind=a.kind,
+                         failed=sp(a.failed), why=a.why, kind=kind,
                          tags=sp(a.tags), session_ref=a.ref,
                          stated_by_frank=a.stated_by_frank, embed=False)
         except mm.NotPersisted as e:
