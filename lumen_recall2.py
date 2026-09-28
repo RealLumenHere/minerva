@@ -463,6 +463,14 @@ def _words(text):
     return re.findall(r'[a-z0-9]+', (text or '').lower())
 
 
+def _phrase_in(q_seq, phrase_words):
+    """True when `phrase_words` appears contiguously, on word boundaries, in `q_seq`."""
+    n = len(phrase_words)
+    if not n:
+        return False
+    return any(q_seq[i:i + n] == phrase_words for i in range(len(q_seq) - n + 1))
+
+
 def _asks_about(q_words, q_lower, subject, predicate, dead_value):
     """True when the query asks about THIS dead fact, not merely near it.
 
@@ -474,14 +482,24 @@ def _asks_about(q_words, q_lower, subject, predicate, dead_value):
     still live-verified"). Subject alone is not enough ("ssh into nephthys" wants
     the procedure, the dead IP inside it is incidental), and predicate or value
     alone is not either: 'status' and 'dead' are ordinary English.
+
+    wq#3038: all three arms match on word boundaries. The dead_value arm used to
+    be a raw `dv in q_lower` substring test, so the fixture's short values found
+    themselves inside ordinary English -- thor/fan_status/dead fired on "thor
+    migration deadline notes", sia/status/UP on "sia backup schedule" -- and
+    demoted notes the query never asked about, which is the qid 142 shape the
+    subject arm was written to close. Multi-word values ("LIVE-VERIFIED") must
+    appear contiguously, so "the live server is verified" does not count.
     """
     subj = _words(subject)
     if not subj or not all(w in q_words for w in subj):
         return False
     if any(len(w) >= 2 and w in q_words for w in _words(predicate)):
         return True
-    dv = (dead_value or '').strip().lower()
-    return len(dv) >= 2 and dv in q_lower
+    dv = _words(dead_value)
+    if sum(len(w) for w in dv) < 2:
+        return False
+    return _phrase_in(_words(q_lower), dv)
 
 
 def _contradicted(conn, nids, query):
