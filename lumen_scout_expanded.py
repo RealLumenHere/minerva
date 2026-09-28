@@ -71,6 +71,14 @@ def insert_intel(conn: sqlite3.Connection, source: str, title: str, url: str,
         conn.commit()
         return True
     except Exception as e:
+        # wq#2895 follow-up: this connection lives for the whole hourly run (minutes of
+        # fetches + sleeps). A failed INSERT/COMMIT leaves Python's implicit BEGIN open,
+        # holding SHARED on minerva.db until process exit -- 2026-09-28 06:01Z that
+        # blocked every minerva.db commit fleet-wide for 4 min. Roll back first.
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         log.warning(f"Insert failed: {e}")
         return False
 
