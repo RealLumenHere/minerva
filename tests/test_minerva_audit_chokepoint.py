@@ -225,6 +225,9 @@ def test_cli_commit_defers_to_memoryd_when_it_accepts(episode, monkeypatch):
     write in exactly the query this ticket exists to make trustworthy."""
     monkeypatch.setattr(episode, '_memoryd_commit',
                         lambda *a, **k: ('deadbeefcafe', None))
+    # wq#2772: the daemon row is faked here, so fake its read-back too; the
+    # real read-back on this path is covered by test_wq2772_* below.
+    monkeypatch.setattr(episode.mm, 'verify_landed', lambda *a, **k: [])
     nid = episode.commit('lane commit', session_ref='wq#1634')
     assert nid == 'deadbeefcafe'
     assert audit_rows("table_name='archival_notes'") == []
@@ -242,3 +245,63 @@ def test_existing_write_note_callers_are_unaudited_and_unchanged(episode):
     import minerva_memory as mm
     nid = mm.write_note('session', 'legacy caller', 'body', source_ref='x')
     assert nid and audit_rows("table_name='archival_notes'") == []
+
+
+# ---------------- wq#2772: commit is DB-first, read-back verified, fail-loud ----------------
+
+def _q(sql, *a):
+    c = sqlite3.connect(ls.DB)
+    try:
+        return c.execute(sql, a).fetchall()
+    finally:
+        c.close()
+
+
+def test_wq2772_commit_lands_row_and_fts_event_before_md(episode):
+    import minerva_memory as mm
+    nid = episode.commit('BLUEFOX regression probe', changed=['phone'], session_ref='wq#2772')
+    assert _q('SELECT id FROM archival_notes WHERE id=?', nid) == [(nid,)]
+    assert _q("SELECT ref FROM recall_fts WHERE recall_fts MATCH 'BLUEFOX'") == [('wq#2772',)]
+    assert list(mm.ARCHIVAL_DIR.glob(f'*_{nid}_session.md'))
+    assert not list(mm.ARCHIVAL_DIR.glob('*.tmp.*'))
+
+
+def test_wq2772_embed_death_cannot_orphan_the_note(episode, monkeypatch):
+    """The exact incident: the caller's timeout kills us inside embed(). Row and
+    FTS event must already be committed; only the vector is lost (NULL = repair)."""
+    import minerva_memory as mm
+    def die(*a, **k):
+        raise KeyboardInterrupt('simulated SIGKILL mid-embed')
+    monkeypatch.setattr(mm, 'embed', die)
+    with pytest.raises(KeyboardInterrupt):
+        episode.commit('killed mid embed', session_ref='wq#2772')
+    rows = _q("SELECT id, embedding FROM archival_notes WHERE title='killed mid embed'")
+    assert len(rows) == 1 and rows[0][1] is None
+    assert _q("SELECT count(*) FROM recall_fts WHERE recall_fts MATCH 'killed'") == [(1,)]
+
+
+def test_wq2772_missing_row_raises_and_writes_no_md(episode, monkeypatch):
+    import minerva_memory as mm
+    monkeypatch.setattr(mm, 'verify_landed', lambda *a, **k: ['no archival_notes row'])
+    with pytest.raises(mm.NotPersisted):
+        episode.commit('ghost write', session_ref='wq#2772')
+    assert not list(mm.ARCHIVAL_DIR.glob('*.md'))
+
+
+def test_wq2772_memoryd_accept_with_no_row_is_not_success(episode, monkeypatch):
+    import minerva_memory as mm
+    monkeypatch.setattr(episode, '_memoryd_commit', lambda *a, **k: ('deadbeefcafe', None))
+    with pytest.raises(mm.NotPersisted, match='no archival_notes row'):
+        episode.commit('daemon lied', session_ref='wq#2772')
+
+
+def test_wq2772_repeat_commit_keeps_provenance_and_embedding(episode, monkeypatch):
+    import numpy as np
+    import minerva_memory as mm
+    monkeypatch.setattr(mm, 'embed', lambda *a, **k: np.ones(768, dtype=np.float32))
+    n1 = episode.commit('dup commit', session_ref='wq#2772')
+    ca1, emb1 = _q('SELECT created_at, embedding FROM archival_notes WHERE id=?', n1)[0]
+    monkeypatch.setattr(mm, 'embed', lambda *a, **k: None)   # nomic down on the retry
+    n2 = episode.commit('dup commit', session_ref='wq#2772')
+    ca2, emb2 = _q('SELECT created_at, embedding FROM archival_notes WHERE id=?', n2)[0]
+    assert n1 == n2 and ca1 == ca2 and emb2 == emb1 and emb2 is not None

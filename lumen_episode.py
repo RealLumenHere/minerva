@@ -72,7 +72,7 @@ def _memoryd_commit(kind, title, content, tags, source_ref):
 
 
 def commit(summary, changed=None, worked=None, failed=None, why='',
-           kind='session', tags=None, session_ref='', stated_by_frank=False):
+           kind='session', tags=None, session_ref='', stated_by_frank=False, embed=True):
     def _b(label, items):
         items = [i for i in (items or []) if i]
         return f'## {label}\n' + ('\n'.join(f'- {i}' for i in items) if items else '- (none)') + '\n'
@@ -85,18 +85,27 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
     # wq#1634 §4.5: memoryd first (it audits and governs), direct write second.
     # Today the fallback is the primary path for CLI sessions; it must not be the
     # unaudited one.
+    fail_str = '; '.join(failed or [])
+    # terse recall-tier event so FTS keyword search finds it fast
+    ev_text = f'{summary} :: changed={"; ".join(changed or [])} :: failed={fail_str} :: {why}'[:3500]
     nid, fell_back = _memoryd_commit(kind, summary[:200], content, tags, session_ref)
     if nid is None:
-        nid = mm.write_note(
+        # wq#2772: archival row + audit row + recall_fts event in ONE transaction,
+        # committed BEFORE the .md and BEFORE the embed, then read back. Raises
+        # mm.NotPersisted instead of returning an id that recall can never find.
+        nid, _ = mm.write_note_verified(
             kind, summary[:200], content, tags=tags, source_ref=session_ref,
             audit={'action': minerva_audit.WRITE, 'source_ref': session_ref,
                    'detail': f'lumen_episode.commit fallback ({fell_back}) kind={kind}',
                    'source_kind': minerva_audit.resolve_source_kind(stated_by_frank),
-                   'invariant': 'wq1634-fail-open'})
-    # also drop a terse recall-tier event so FTS keyword search finds it fast
-    fail_str = '; '.join(failed or [])
-    mm.log_event(kind, f'{summary} :: changed={"; ".join(changed or [])} :: failed={fail_str} :: {why}'[:3500],
-                 ref=session_ref or nid)
+                   'invariant': 'wq1634-fail-open'},
+            recall_event=(kind, ev_text, session_ref or None), embed_now=False)
+    else:
+        rowid = mm.log_event(kind, ev_text, ref=session_ref or nid)
+        missing = mm.verify_landed(nid, rowid, require_fts=True)
+        if missing:
+            raise mm.NotPersisted(f'memoryd-accepted note {nid}: {"; ".join(missing)}')
+    direct_write = fell_back is not None
     # Failure Archaeology wire-in (2026-08-14, wq#590): a non-empty --failed
     # auto-creates an fq ledger row. The data was always written; now something
     # reads it. FAIL-OPEN: an episode commit must never die because the failure
@@ -120,6 +129,10 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
         _sal.label_outcome(nid, failed_str=fail_str, ref=session_ref)
     except Exception:
         pass
+    # wq#2772: embed LAST. The row + FTS event are already durable and verified;
+    # a timeout/kill from here on costs only the vector (NULL -> embed guard repairs).
+    if embed and direct_write:
+        mm.embed_note(nid)
     return nid
 
 def recall(query, top_k=6):
@@ -255,11 +268,19 @@ def _main():
             print(_fmt(h))
     elif a.cmd == 'commit':
         sp = lambda s: [x.strip() for x in s.replace(';', ',').split(',') if x.strip()]
-        nid = commit(a.summary, changed=sp(a.changed), worked=sp(a.worked),
-                     failed=sp(a.failed), why=a.why, kind=a.kind,
-                     tags=sp(a.tags), session_ref=a.ref,
-                     stated_by_frank=a.stated_by_frank)
-        print(f'committed episode {nid}')
+        # wq#2772: FAIL LOUD. Exit 3 + stderr when the row or its FTS event is not
+        # in minerva.db; the "committed" line is printed only after read-back, and
+        # BEFORE the embed, so a caller timeout during embed still saw the truth.
+        try:
+            nid = commit(a.summary, changed=sp(a.changed), worked=sp(a.worked),
+                         failed=sp(a.failed), why=a.why, kind=a.kind,
+                         tags=sp(a.tags), session_ref=a.ref,
+                         stated_by_frank=a.stated_by_frank, embed=False)
+        except mm.NotPersisted as e:
+            print(f'EPISODE NOT PERSISTED: {e}', file=sys.stderr, flush=True)
+            sys.exit(3)
+        print(f'committed episode {nid} (db-verified: archival_notes + recall_fts)', flush=True)
+        mm.embed_note(nid)
 
 if __name__ == '__main__':
     _main()

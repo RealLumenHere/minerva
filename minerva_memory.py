@@ -25,8 +25,19 @@ from dotenv import load_dotenv
 import minerva_audit
 load_dotenv('/home/lumen/agent/.env')
 
-DB = Path('/home/lumen/minerva/minerva.db')
-ARCHIVAL_DIR = Path('/home/lumen/minerva/archival')
+# wq#2772: MINERVA_DB / MINERVA_ARCHIVAL_DIR follow the existing fleet convention
+# (lumen_salience, lumen_dream_digest, lumen_prose_lifecycle) so a scratch test
+# routes this module AND its satellites away from prod in one env var.
+DB = Path(os.environ.get('MINERVA_DB', '/home/lumen/minerva/minerva.db'))
+ARCHIVAL_DIR = Path(os.environ.get('MINERVA_ARCHIVAL_DIR', '/home/lumen/minerva/archival'))
+# Writers wait this long on a locked DB instead of sqlite3's 5s default; the
+# pytest episode floods (hundreds of commits/min) made 5s a real failure mode.
+DB_TIMEOUT = float(os.environ.get('MINERVA_DB_TIMEOUT', '30'))
+
+
+class NotPersisted(RuntimeError):
+    """wq#2772: a write the caller would otherwise report as success is not in
+    minerva.db. Raised, never swallowed, by the verified write path."""
 MEMORY_FILE = Path('/home/lumen/claude_memory.md')
 LOG = Path('/home/lumen/minerva/logs/memory.log')
 EMBED_URL = os.environ.get('MINERVA_EMBED_URL', 'http://127.0.0.1:11434')  # wq#567: env-overridable; pin on replacement hw when it lands
@@ -139,103 +150,173 @@ def _ensure_recall_fts():
 
 # ---------- Archival (cold, semantic) ----------
 
-def write_note(kind, title, content, tags=None, source_ref=None, origin=None, trust=None,
-               audit=None):
-    # Memory V3 P5 provenance: env overrides let callers (e.g. convo-learn subprocess)
-    # tag writes without CLI plumbing. Defaults = operator session.
-    origin = origin or os.environ.get('LUMEN_MEM_ORIGIN', 'claude-session')
-    trust = trust or os.environ.get('LUMEN_MEM_TRUST', 'operator')
-    """Persist an archival note with embedding for semantic retrieval.
+def _connect():
+    return sqlite3.connect(DB, timeout=DB_TIMEOUT)
 
-    wq#1634: `audit` is an optional dict of minerva_audit.audit() kwargs (action,
-    source_ref, detail, source_kind). When given, the audit row is written on THIS
-    connection, so it commits with the note or not at all -- the same guarantee
-    memoryd's kernel gives lane writes. Default None keeps every existing caller
-    byte-identical; only the fail-open CLI commit path passes it today."""
+
+def _ensure_recall_fts_on(conn):
+    try:
+        conn.execute("CREATE VIRTUAL TABLE IF NOT EXISTS recall_fts USING fts5(kind, content, ref, ts)")
+    except sqlite3.OperationalError as e:
+        log(f'  FTS5 unavailable: {e}. Falling back to plain table.')
+        conn.execute('CREATE TABLE IF NOT EXISTS recall_fts (kind TEXT, content TEXT, ref TEXT, ts TEXT)')
+
+
+def note_id(kind, title, content):
+    return hashlib.md5(f'{kind}:{title}:{content[:200]}'.encode()).hexdigest()[:12]
+
+
+def _write_md(nid, kind, title, content, tags, source_ref, created_at):
+    """Archival .md mirror. Written AFTER the DB commit (wq#2772) and atomically
+    (tmp + rename), so a crash can never leave a .md that recall cannot see."""
     ARCHIVAL_DIR.mkdir(parents=True, exist_ok=True)
-    nid = hashlib.md5(f'{kind}:{title}:{content[:200]}'.encode()).hexdigest()[:12]
-    path = ARCHIVAL_DIR / f'{datetime.now(timezone.utc).strftime("%Y%m%d")}_{nid}_{kind}.md'
-    md_parts = [
-        '---',
-        f'id: {nid}',
-        f'kind: {kind}',
-        f'title: {title}',
-        f'tags: {",".join(tags or [])}',
-        f'source_ref: {source_ref or ""}',
-        f'created_at: {datetime.now(timezone.utc).isoformat()}',
-        '---',
-        '',
-        f'# {title}',
-        '',
-        content,
-    ]
-    path.write_text('\n'.join(md_parts))
+    path = ARCHIVAL_DIR / f'{created_at[:10].replace("-", "")}_{nid}_{kind}.md'
+    md = '\n'.join([
+        '---', f'id: {nid}', f'kind: {kind}', f'title: {title}',
+        f'tags: {",".join(tags or [])}', f'source_ref: {source_ref or ""}',
+        f'created_at: {created_at}', '---', '', f'# {title}', '', content,
+    ])
+    tmp = path.with_suffix(f'.md.tmp.{os.getpid()}')
+    tmp.write_text(md)
+    os.replace(tmp, path)
+    return path
 
-    # Embedding on title + content
+
+def embed_note(nid, title=None, content=None):
+    """Fill archival_notes.embedding for nid. Best effort by design: a NULL
+    embedding is the sanctioned repair-queue state (memory_embed_guard, hourly),
+    so a slow/evicted nomic can no longer cost the row itself (wq#2772)."""
+    if title is None or content is None:
+        conn = _connect()
+        r = conn.execute('SELECT title, content FROM archival_notes WHERE id=?', (nid,)).fetchone()
+        conn.close()
+        if not r:
+            return False
+        title, content = r
     emb = embed(f'{title}. {content[:2000]}')
-    # wq#465 ROOT CAUSE: this used to store b'' on embed failure. In SQLite an
-    # empty blob is NOT NULL, so every `WHERE embedding IS NOT NULL` filter in the
-    # codebase happily selected it, and np.frombuffer(b'') -> shape (0,) then blew
-    # up np.dot in the v3 dense scan -> fleet-wide silent v2 fallback.
-    # Store NULL: semantically "unknown", correctly excluded by IS NOT NULL, and
-    # picked up by the repair loop (memory_embed_guard / lumen_dream.embed_retry).
-    emb_bytes = emb.tobytes() if emb is not None else None
-    if emb_bytes is None:
-        log(f'  !! embed FAILED for note {nid} -- stored NULL, queued for repair '
-            f'(memory_embed_guard.py repairs; never store an empty blob)')
-
-    conn = sqlite3.connect(DB)
-    # wq#610: was INSERT OR REPLACE, which SQLite implements as DELETE+INSERT on
-    # an id collision (nid is content-derived -- md5 of kind:title:content[:200] --
-    # so a repeat commit with the same summary/changed/worked/failed/why text, e.g.
-    # a retried lumen_episode.py commit, genuinely collides). DELETE+INSERT does
-    # NOT fire the wq#575 BEFORE UPDATE OF provenance-immutability trigger (it's an
-    # UPDATE trigger; SQLite's replace path is a DELETE, not an UPDATE), so this was
-    # the one write path in the codebase that could silently reset a row's
-    # origin/trust/created_at/agent_id/lane on nothing more than a duplicate write.
-    # Closing this does NOT need a BEFORE DELETE trigger (which 575's own report
-    # correctly flagged as breaking commit() for every lane, since duplicate
-    # episode commits are routine, not exceptional): switching to a real
-    # INSERT ... ON CONFLICT DO UPDATE whose SET list excludes every column the
-    # immutability trigger watches (origin, trust, agent_id, lane, created_at,
-    # content_sha256, supersedes) eliminates the DELETE entirely, so there is
-    # nothing left for a BEFORE DELETE trigger to guard against on this path --
-    # and it fixes the actual bug (silent provenance reset on collision) rather
-    # than just avoiding the bypass. Verified on a scratch DB copy before this
-    # edit: a same-id conflict updates content/tags/source_ref but leaves
-    # created_at/origin/trust exactly as first written; a negative control that
-    # DOES set origin=excluded.origin correctly ABORTs against the live trigger.
-    conn.execute(
-        '''INSERT INTO archival_notes
-           (id, kind, title, content, embedding, tags, source_ref, created_at, origin, trust)
-           VALUES (?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(id) DO UPDATE SET
-             kind=excluded.kind, title=excluded.title, content=excluded.content,
-             embedding=excluded.embedding, tags=excluded.tags,
-             source_ref=excluded.source_ref''',
-        (nid, kind[:40], title[:300], content[:8000], emb_bytes,
-         ','.join(tags or [])[:500], (source_ref or '')[:300],
-         datetime.now(timezone.utc).isoformat(), origin[:40], trust[:20]))
-    if audit is not None:
-        minerva_audit.audit(conn, table_name='archival_notes', row_id=nid, **audit)
+    if emb is None:
+        log(f'  !! embed FAILED for note {nid} -- row kept with NULL embedding, queued for '
+            f'repair (memory_embed_guard.py repairs; never store an empty blob)')
+        return False
+    conn = _connect()
+    conn.execute('UPDATE archival_notes SET embedding=? WHERE id=?', (emb.tobytes(), nid))
     conn.commit()
     conn.close()
-    log(f'  archival note: {nid} [{kind}] "{title[:60]}"')
+    return True
+
+
+def write_note_verified(kind, title, content, tags=None, source_ref=None, origin=None,
+                        trust=None, audit=None, recall_event=None, embed_now=True):
+    """wq#2772 verified write. Returns (note_id, fts_rowid or None).
+
+    ROOT CAUSE this replaces: the old write_note wrote the .md FIRST, then blocked
+    in embed() (up to 2x90s while nomic was evicted by LFM2 loads under
+    OLLAMA_MAX_LOADED_MODELS=1), and only then INSERTed. foreman's
+    commit_to_archive runs lumen_episode.py under subprocess timeout=30 (and chat
+    tool calls have their own ceilings), so the child was SIGKILLed mid-embed:
+    .md on disk, no archival_notes row, no recall_fts event, caller fail-open.
+
+    New order: (1) ONE transaction on ONE connection: archival row (embedding
+    untouched/NULL) + optional audit row + optional recall_fts event, commit;
+    (2) read back from a FRESH connection, raise NotPersisted if anything is
+    missing; (3) atomic .md mirror; (4) embed (optional here, best effort).
+    A kill anywhere after (1) loses at most the embedding, which the guard repairs."""
+    origin = origin or os.environ.get('LUMEN_MEM_ORIGIN', 'claude-session')
+    trust = trust or os.environ.get('LUMEN_MEM_TRUST', 'operator')
+    nid = note_id(kind, title, content)
+    created_at = datetime.now(timezone.utc).isoformat()
+    fts_rowid = None
+    conn = _connect()
+    try:
+        # wq#610 semantics kept: ON CONFLICT DO UPDATE whose SET list excludes every
+        # provenance column the wq#575 immutability trigger watches. wq#2772: the
+        # embedding is no longer in the SET list either -- a repeat commit keeps the
+        # existing vector (same kind/title/content[:200] => same meaning) and
+        # embed_note() refreshes it after commit.
+        conn.execute(
+            '''INSERT INTO archival_notes
+               (id, kind, title, content, embedding, tags, source_ref, created_at, origin, trust)
+               VALUES (?,?,?,?,NULL,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 kind=excluded.kind, title=excluded.title, content=excluded.content,
+                 tags=excluded.tags, source_ref=excluded.source_ref''',
+            (nid, kind[:40], title[:300], content[:8000],
+             ','.join(tags or [])[:500], (source_ref or '')[:300],
+             created_at, origin[:40], trust[:20]))
+        if audit is not None:
+            minerva_audit.audit(conn, table_name='archival_notes', row_id=nid, **audit)
+        if recall_event is not None:
+            ek, ec, er = recall_event
+            _ensure_recall_fts_on(conn)
+            cur = conn.execute(
+                'INSERT INTO recall_fts (kind, content, ref, ts) VALUES (?,?,?,?)',
+                (ek[:40], ec[:4000], (er or nid)[:300], created_at))
+            fts_rowid = cur.lastrowid
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    missing = verify_landed(nid, fts_rowid if recall_event is not None else None,
+                            require_fts=recall_event is not None)
+    if missing:
+        raise NotPersisted(f'note {nid}: {"; ".join(missing)}')
+    _write_md(nid, kind, title, content, tags, source_ref, created_at)
+    log(f'  archival note: {nid} [{kind}] "{title[:60]}" (db-verified)')
+    if embed_now:
+        embed_note(nid, title, content)
+    return nid, fts_rowid
+
+
+def verify_landed(nid, fts_rowid=None, require_fts=False):
+    """Read back from a FRESH connection (never the writer's handle) so we see
+    what another process will see. Returns a list of what is missing; [] = landed."""
+    missing = []
+    conn = sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=DB_TIMEOUT)
+    try:
+        if not conn.execute('SELECT 1 FROM archival_notes WHERE id=?', (nid,)).fetchone():
+            missing.append('no archival_notes row')
+        if require_fts:
+            if fts_rowid is None:
+                missing.append('no recall_fts rowid returned')
+            elif not conn.execute('SELECT 1 FROM recall_fts WHERE rowid=?', (fts_rowid,)).fetchone():
+                missing.append(f'no recall_fts event rowid={fts_rowid}')
+    finally:
+        conn.close()
+    return missing
+
+
+def write_note(kind, title, content, tags=None, source_ref=None, origin=None, trust=None,
+               audit=None):
+    """Persist an archival note with embedding for semantic retrieval.
+
+    wq#1634: `audit` is an optional dict of minerva_audit.audit() kwargs, written on
+    the SAME connection so it commits with the note or not at all.
+    wq#2772: now a thin wrapper over write_note_verified (DB first, read-back
+    verified, .md second, embed last). Signature and return value unchanged."""
+    nid, _ = write_note_verified(kind, title, content, tags=tags, source_ref=source_ref,
+                                 origin=origin, trust=trust, audit=audit)
     return nid
 
 
 # ---------- Recall (searchable FTS) ----------
 
 def log_event(kind, content, ref=None):
-    """Append a recall-tier event. Cheap, fast, no embedding."""
-    _ensure_recall_fts()
+    """Append a recall-tier event. Cheap, fast, no embedding.
+    wq#2772: returns the recall_fts rowid so callers can read it back."""
     ts = datetime.now(timezone.utc).isoformat()
-    conn = sqlite3.connect(DB)
-    conn.execute(
-        'INSERT INTO recall_fts (kind, content, ref, ts) VALUES (?,?,?,?)',
-        (kind[:40], content[:4000], (ref or '')[:300], ts))
-    conn.commit()
-    conn.close()
+    conn = _connect()
+    try:
+        _ensure_recall_fts_on(conn)
+        cur = conn.execute(
+            'INSERT INTO recall_fts (kind, content, ref, ts) VALUES (?,?,?,?)',
+            (kind[:40], content[:4000], (ref or '')[:300], ts))
+        rowid = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    return rowid
 
 
 # ---------- Search (unified across tiers) ----------
