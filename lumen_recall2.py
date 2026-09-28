@@ -403,6 +403,114 @@ def _query_tags(conn, q_toks):
 SALIENCE_ON = os.environ.get('MEMORY_V4_SALIENCE', '0') == '1'
 ARCHIVE_FILTER = os.environ.get('MEMORY_V4_ARCHIVE_FILTER', '0') == '1'
 
+# ── wq#1614: contradiction penalty (MEMORY_V4_W_CONTRA) ────────────────────────
+# WHY (MINERVA_STALENESS_REVIEW §3.7 fix #9): wq#1610 detects notes that assert a
+# state_facts value we have since closed and writes them to note_contradictions.
+# Detection alone changes nothing a caller sees -- the stale note still ranks where
+# it ranked. This multiplies by W_CONTRA the fused score of a note carrying an
+# OPEN contradiction row that the query asks about (_asks_about, wq#3017).
+#
+# SOFT, not a filter. A contradicted note is usually a good procedure wrapped
+# around one dead fact ("ssh nephthys at 100.98.74.87, then ...") -- the procedure
+# is still the best answer we have and dropping the note loses it. 0.5 demotes;
+# it cannot make a note unreachable, and it preserves the relative order of the
+# contradicted set among itself.
+#
+# This is NOT the recency prior coming back. W_REC stays 0.00: freshness as a
+# blanket prior was measured to COST recall (see the #574 block above). This
+# fires only on notes we hold positive, row-level evidence about.
+#
+# 1.0 == off, and off is byte-identical to pre-1614 scoring (no query, no set,
+# no multiply) -- asserted by test_contra_penalty.py, not assumed.
+W_CONTRA = float(os.environ.get('MEMORY_V4_W_CONTRA', '0.5'))
+# Eval hook: read the contradiction set from a frozen JSON export instead of the
+# live table, so a benchmark measures a fixed set rather than whatever the hourly
+# scan happened to have written that minute. Rows are the note_contradictions
+# export shape; open == resolved_at/cleared_at null.
+CONTRA_FIXTURE = os.environ.get('MEMORY_V4_CONTRA_FIXTURE', '')
+_CONTRA_FIXTURE_CACHE = {'path': None, 'rows': None}
+
+
+def _contra_open_col(conn):
+    """Name of the resolution column, or None if the table does not exist.
+
+    wq#1610 shipped the column as `cleared_at`; the live table exports it as
+    `resolved_at` (eval/fixtures/note_contradictions_20260913.json). Introspect
+    rather than pick one and be silently wrong on the other -- a wrong column
+    name would raise, get swallowed by the fail-open below, and the penalty would
+    read as "measured, moved nothing" when it never ran at all.
+    """
+    cols = {r[1] for r in conn.execute('PRAGMA table_info(note_contradictions)')}
+    for c in ('resolved_at', 'cleared_at'):
+        if c in cols:
+            return c
+    return None
+
+
+def _fixture_rows():
+    rows = _CONTRA_FIXTURE_CACHE['rows']
+    if rows is None or _CONTRA_FIXTURE_CACHE['path'] != CONTRA_FIXTURE:
+        import json
+        with open(CONTRA_FIXTURE) as fh:
+            rows = [(r['note_id'], r['subject'], r['predicate'], r['dead_value'])
+                    for r in json.load(fh)
+                    if r.get('resolved_at') is None and r.get('cleared_at') is None]
+        _CONTRA_FIXTURE_CACHE.update(path=CONTRA_FIXTURE, rows=rows)
+    return rows
+
+
+def _words(text):
+    return re.findall(r'[a-z0-9]+', (text or '').lower())
+
+
+def _asks_about(q_words, q_lower, subject, predicate, dead_value):
+    """True when the query asks about THIS dead fact, not merely near it.
+
+    wq#3017: the blanket multiply was rejected by the golden gate. qid 142's gold
+    note carries a live nephthys/ts_ip row, and a query about re-provisioning with
+    a fleet auth key -- which never mentions nephthys or its IP -- lost its rank-1
+    answer to it. So a row fires only when the query names its subject AND either
+    a word of its predicate or its dead value ("nephthys ip", "is llama33-local
+    still live-verified"). Subject alone is not enough ("ssh into nephthys" wants
+    the procedure, the dead IP inside it is incidental), and predicate or value
+    alone is not either: 'status' and 'dead' are ordinary English.
+    """
+    subj = _words(subject)
+    if not subj or not all(w in q_words for w in subj):
+        return False
+    if any(len(w) >= 2 and w in q_words for w in _words(predicate)):
+        return True
+    dv = (dead_value or '').strip().lower()
+    return len(dv) >= 2 and dv in q_lower
+
+
+def _contradicted(conn, nids, query):
+    """Subset of `nids` with an OPEN note_contradictions row `query` asks about.
+
+    Fail-open by construction: if the table is absent (the #1610 scan is not
+    installed on this box) or the query raises, the result is the empty set and
+    every score is untouched. A detector outage must not reorder recall.
+    """
+    if not nids:
+        return set()
+    try:
+        if CONTRA_FIXTURE:
+            rows = [r for r in _fixture_rows() if r[0] in nids]
+        else:
+            col = _contra_open_col(conn)
+            if col is None:
+                return set()
+            nids = list(nids)
+            ph = ','.join('?' * len(nids))
+            rows = conn.execute(
+                f'SELECT note_id, subject, predicate, dead_value '
+                f'FROM note_contradictions '
+                f'WHERE {col} IS NULL AND note_id IN ({ph})', nids).fetchall()
+    except (sqlite3.Error, OSError, ValueError, KeyError, TypeError):
+        return set()
+    q_words, q_lower = set(_words(query)), query.lower()
+    return {r[0] for r in rows if _asks_about(q_words, q_lower, r[1], r[2], r[3])}
+
 
 def _search_v3_impl(query, top_k=10):
     # wq#2895: this runs INSIDE lumen-memoryd on every /recall. Before, any raise
@@ -530,6 +638,11 @@ def _search_v3_core(conn, query, top_k=10):
         if q_ents:
             ent_scores = _entity_scores(conn, q_ents, set(cand.keys()))
 
+    # wq#1614: one query for the whole candidate pool, skipped entirely when the
+    # penalty is off, so "off" costs nothing rather than costing a no-op SELECT.
+    contra = (_contradicted(conn, set(cand.keys()), query)
+              if W_CONTRA != 1.0 else set())
+
     scored = []
     for r in rows:
         blob_toks = set(_tokens((r['title'] or '') + ' ' + (r['content'] or '')[:2500]))
@@ -546,12 +659,22 @@ def _search_v3_core(conn, query, top_k=10):
         fused = W_D * d + W_LEX * lex + W_G * g + W_REC * rec
         if ENTITY_ON:
             fused += ENTITY_W * ent
-        scored.append({'tier': 'archival', 'score': round(fused, 4),
-                       'id': r['id'], 'kind': r['kind'], 'title': r['title'],
-                       'content': (r['content'] or '')[:800],
-                       'tags': r['tags'], 'ts': r['created_at'], 'trust': r['trust'],
-                       '_d': round(d, 3), '_lex': round(lex, 3), '_g': round(g, 3),
-                       '_ent': round(ent, 3)})
+        # wq#1614: applied to the fused RETRIEVAL score only. The #576 salience
+        # boost below is deliberately outside the multiply -- it is a usage term,
+        # not evidence about the note's content, and scaling it here would make
+        # the penalty's size depend on how often the note happens to be read.
+        contradicted = r['id'] in contra
+        if contradicted:
+            fused *= W_CONTRA
+        hit = {'tier': 'archival', 'score': round(fused, 4),
+               'id': r['id'], 'kind': r['kind'], 'title': r['title'],
+               'content': (r['content'] or '')[:800],
+               'tags': r['tags'], 'ts': r['created_at'], 'trust': r['trust'],
+               '_d': round(d, 3), '_lex': round(lex, 3), '_g': round(g, 3),
+               '_ent': round(ent, 3)}
+        if contradicted:
+            hit['_contra'] = W_CONTRA
+        scored.append(hit)
     if FED_ON:
         scored.extend(_federated(conn, query, q_toks, q_emb, now_ts))
     # wq#576 salience: ADDITIVE and NON-FILTERING (a multiplicative/filtering usage
@@ -604,6 +727,7 @@ def search_v3(query, top_k=10):
 if __name__ == '__main__':
     q = ' '.join(sys.argv[1:]) or 'test query'
     for i, h in enumerate(search_v3(q), 1):
+        contra = f" contra=x{h['_contra']}" if '_contra' in h else ''
         print(f"#{i} [{h['tier'][:4]}] {h['score']:.3f} (d={h['_d']} lex={h['_lex']} "
-              f"g={h['_g']} ent={h['_ent']}) {h.get('_sec') or h['id'][:8]} "
+              f"g={h['_g']} ent={h['_ent']}{contra}) {h.get('_sec') or h['id'][:8]} "
               f"{h['title'][:70]}")
