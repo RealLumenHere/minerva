@@ -30,6 +30,7 @@ summary (after the additive `summary` column migration).
 """
 import argparse
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 
 DB = '/home/lumen/minerva/minerva.db'
@@ -63,7 +64,14 @@ def main():
     ap.add_argument('--db', default=DB)
     a = ap.parse_args()
 
-    conn = sqlite3.connect(a.db)
+    # wq#3146: closing() so an exception on any path (ALTER, a locked UPDATE)
+    # still releases the connection -- same class as the wq#2895 minerva.db lock.
+    # sqlite3's own `with conn:` only commits/rolls back, it never closes.
+    with closing(sqlite3.connect(a.db)) as conn:
+        return _sweep(conn, a.apply)
+
+
+def _sweep(conn, apply):
     conn.row_factory = sqlite3.Row
     _ensure_summary_column(conn)
     rows = conn.execute(SELECT_SQL).fetchall()
@@ -73,9 +81,8 @@ def main():
     if len(rows) > 10:
         print(f'  ... and {len(rows) - 10} more')
 
-    if not a.apply:
+    if not apply:
         print('dry-run: nothing written (pass --apply to reject these)')
-        conn.close()
         return 0
 
     ids = [r['id'] for r in rows]
@@ -88,7 +95,6 @@ def main():
     n = conn.execute(
         "SELECT count(*) FROM proposals WHERE status = 'rejected' AND id IN "
         f"({','.join('?' * len(ids))})", ids).fetchone()[0] if ids else 0
-    conn.close()
     print(f'rejected {n}/{len(ids)} proposal(s) — source row still has no fetched url/summary')
     return 0
 
