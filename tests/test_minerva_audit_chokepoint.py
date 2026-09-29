@@ -203,8 +203,8 @@ def episode(db, monkeypatch):
 
 
 def test_cli_commit_falls_back_to_a_direct_write_that_is_still_audited(episode):
-    nid = episode.commit('audit chokepoint landed', changed=['lumen_state.py'],
-                         session_ref='wq#1634')
+    nid, _ = episode.commit('audit chokepoint landed', changed=['lumen_state.py'],
+                            session_ref='wq#1634')
     rows = audit_rows("table_name='archival_notes'")
     assert len(rows) == 1
     assert rows[0]['row_id'] == nid and rows[0]['action'] == 'write'
@@ -228,8 +228,9 @@ def test_cli_commit_defers_to_memoryd_when_it_accepts(episode, monkeypatch):
     # wq#2772: the daemon row is faked here, so fake its read-back too; the
     # real read-back on this path is covered by test_wq2772_* below.
     monkeypatch.setattr(episode.mm, 'verify_landed', lambda *a, **k: [])
-    nid = episode.commit('lane commit', session_ref='wq#1634')
+    nid, reject_reason = episode.commit('lane commit', session_ref='wq#1634')
     assert nid == 'deadbeefcafe'
+    assert reject_reason is None
     assert audit_rows("table_name='archival_notes'") == []
 
 
@@ -259,7 +260,7 @@ def _q(sql, *a):
 
 def test_wq2772_commit_lands_row_and_fts_event_before_md(episode):
     import minerva_memory as mm
-    nid = episode.commit('BLUEFOX regression probe', changed=['phone'], session_ref='wq#2772')
+    nid, _ = episode.commit('BLUEFOX regression probe', changed=['phone'], session_ref='wq#2772')
     assert _q('SELECT id FROM archival_notes WHERE id=?', nid) == [(nid,)]
     assert _q("SELECT ref FROM recall_fts WHERE recall_fts MATCH 'BLUEFOX'") == [('wq#2772',)]
     assert list(mm.ARCHIVAL_DIR.glob(f'*_{nid}_session.md'))
@@ -299,9 +300,9 @@ def test_wq2772_repeat_commit_keeps_provenance_and_embedding(episode, monkeypatc
     import numpy as np
     import minerva_memory as mm
     monkeypatch.setattr(mm, 'embed', lambda *a, **k: np.ones(768, dtype=np.float32))
-    n1 = episode.commit('dup commit', session_ref='wq#2772')
+    n1, _ = episode.commit('dup commit', session_ref='wq#2772')
     ca1, emb1 = _q('SELECT created_at, embedding FROM archival_notes WHERE id=?', n1)[0]
     monkeypatch.setattr(mm, 'embed', lambda *a, **k: None)   # nomic down on the retry
-    n2 = episode.commit('dup commit', session_ref='wq#2772')
+    n2, _ = episode.commit('dup commit', session_ref='wq#2772')
     ca2, emb2 = _q('SELECT created_at, embedding FROM archival_notes WHERE id=?', n2)[0]
     assert n1 == n2 and ca1 == ca2 and emb2 == emb1 and emb2 is not None

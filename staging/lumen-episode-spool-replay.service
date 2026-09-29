@@ -1,0 +1,15 @@
+[Unit]
+Description=wq#3173: replay episode commits memoryd's identity gate rejected
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lumen
+WorkingDirectory=/home/lumen/minerva
+ExecStart=/usr/bin/python3 /home/lumen/minerva/lumen_episode_spool_replay.py
+TimeoutStartSec=5m
+MemoryMax=256M
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

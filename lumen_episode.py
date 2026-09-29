@@ -10,7 +10,8 @@ PBox, the node-killer reaping live sessions, daily fleet deaths, etc.).
 
 API:
   commit(summary, changed=[], worked=[], failed=[], why='', kind='session',
-         tags=[], session_ref='') -> note_id      # structured post-mortem
+         tags=[], session_ref='') -> (note_id, reject_reason)  # reject_reason is
+                                                                # None on a memoryd accept
   recall(query, top_k=6) -> list[dict]             # relevant past episodes
   precheck(plan) -> (verdict, hits)                # gate: have we tried/failed this?
 
@@ -19,15 +20,31 @@ CLI:
   lumen_episode.py precheck "<plan>"
   lumen_episode.py commit  --summary "..." --changed "a;b" --worked "c" --failed "d" --why "..." --tags "x,y"
   lumen_episode.py backfill                         # seed documented house-pathologies
+  exit codes: 0 accepted by memoryd, 2 bad --kind, 3 local write not persisted/verified,
+  4 memoryd rejected the write (reason printed first, on stderr) -- note still landed
+  locally and was spooled to EPISODE_SPOOL_DIR for lumen_episode_spool_replay.py.
 
 AUDITED WRITE PATH (wq#1634, MINERVA_PIPELINE_MAP.md §4.5): commit posts to memoryd
 /commit when the daemon is healthy and the session is registered; otherwise it falls
 back to a direct write that appends its own `memory_audit` row in the same
 transaction. Either way the note is answerable by SELECT on memory_audit.
+
+REJECT-GATE FIX (wq#3173): the identity gate (daemon.py resolve_identity, I-7) rejects
+a commit for one of three reasons, each a correct refusal, not a bug:
+  1. "agent %r is not in the wq session registry"        -- $WQ_AGENT never registered
+  2. "agent does not hold a live claim on wq#N"           -- registered, but no claim on
+                                                              the ticket source_ref names
+  3. "agent writes must carry source_ref=wq#N ... (I-7)"  -- no source_ref given at all
+What WAS a bug: the CLI printed the same "committed" line and exited 0 for a reject as
+for a real accept, so the session never learned the governed audit trail didn't happen.
+Now: exit 4, reason first line on stderr, payload spooled to EPISODE_SPOOL_DIR for
+lumen_episode_spool_replay.py (lumen-episode-spool-replay.timer) to retry once the
+same agent id can pass the gate.
 """
-import os, json, sys, argparse
+import os, json, sys, argparse, tempfile, uuid
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 import minerva_audit
 import minerva_memory as mm
@@ -40,6 +57,16 @@ MEMORYD_TIMEOUT = float(os.environ.get('MEMORYD_TIMEOUT', '4'))
 CONTRACT_PATH = os.environ.get(
     'MEMORYD_CONTRACT', '/home/lumen/minerva/v4/schema/memory_contract_v1.yaml')
 MEMORYD_REJECT_MARKER = '/home/lumen/minerva/logs/memoryd_reject.json'
+
+# wq#3173: memoryd's identity gate (daemon.py resolve_identity, I-7) rejects a commit
+# for one of three reasons -- agent not registered, agent registered but holds no live
+# claim on the ticket named by source_ref, or no source_ref at all -- and each is a
+# correct refusal by the gate's own design. The bug was on THIS side: a rejected commit
+# fell back to an unaudited local write and the CLI still printed success, so the
+# session never learned its governed audit trail didn't happen. Spooling here + replay
+# via lumen_episode_spool_replay.py (lumen-episode-spool-replay.timer) gives the reject
+# a durable, retryable record instead of a silent local-only note.
+EPISODE_SPOOL_DIR = os.environ.get('EPISODE_SPOOL_DIR', os.path.expanduser('~/.episode_spool'))
 
 # wq#2901 I-4: --kind took any string while memoryd enforces a closed set, so
 # `verify`, `investigation` and `bugfix` each became a 422 the caller never saw --
@@ -106,6 +133,40 @@ def _breadcrumb_memoryd_reject(reason, agent, ref):
         pass
 
 
+def _spool_rejected(kind, title, content, tags, source_ref, reason, agent):
+    """wq#3173: durable record of a commit memoryd's identity gate rejected, so
+    lumen_episode_spool_replay.py can re-POST it once `agent` is registered and holds
+    the claim `source_ref` names -- instead of the write's governed audit trail simply
+    never happening. Best-effort like the breadcrumb above: an episode commit must
+    never die because spooling did. Returns the spool filename, or None on failure."""
+    try:
+        os.makedirs(EPISODE_SPOOL_DIR, mode=0o700, exist_ok=True)
+        ts = datetime.now(timezone.utc)
+        entry = {
+            'agent': agent, 'kind': kind, 'title': title, 'content': content,
+            'tags': list(tags or []), 'source_ref': source_ref or '',
+            'reason': str(reason)[:300],
+            'spooled_at': ts.isoformat(),
+            'attempts': 0,
+        }
+        name = '%s-%s.json' % (ts.strftime('%Y%m%dT%H%M%S%fZ'), uuid.uuid4().hex[:8])
+        fd, tmp = tempfile.mkstemp(dir=EPISODE_SPOOL_DIR, prefix='.tmp-')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(entry, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, os.path.join(EPISODE_SPOOL_DIR, name))
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+        return name
+    except Exception:
+        return None
+
+
 def _memoryd_commit(kind, title, content, tags, source_ref):
     """POST the note to memoryd (wq#1634 / §4.5). Returns (note_id, None) when the
     daemon accepted it -- the kernel wrote the audit row itself -- or (None, why)
@@ -131,7 +192,17 @@ def _memoryd_commit(kind, title, content, tags, source_ref):
         with urllib.request.urlopen(req, timeout=MEMORYD_TIMEOUT) as r:
             resp = json.loads(r.read().decode() or '{}')
     except urllib.error.HTTPError as e:
-        return None, f'commit HTTP {e.code}'
+        # wq#3173: the daemon's 403 body carries the real cause ({"status": "reject",
+        # "reason": "..."} -- daemon.py resolve_identity/§6.3) but it was going
+        # unread, so every reject surfaced here as the useless "commit HTTP 403".
+        reason = f'commit HTTP {e.code}'
+        try:
+            payload = json.loads(e.read().decode())
+            if payload.get('reason'):
+                reason = '%s: %s' % (payload.get('status') or 'reject', payload['reason'])
+        except Exception:
+            pass
+        return None, reason
     except Exception as e:
         return None, f'{type(e).__name__}: {str(e)[:80]}'
     if resp.get('status') in ('accept', 'noop') and resp.get('id'):
@@ -158,12 +229,19 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
     ev_text = f'{summary} :: changed={"; ".join(changed or [])} :: failed={fail_str} :: {why}'[:3500]
     nid, fell_back = _memoryd_commit(kind, summary[:200], content, tags, session_ref)
     invariant = 'wq1634-fail-open'
-    if nid is None and str(session_ref).startswith('wq#') and minerva_audit.agent_id():
+    agent = minerva_audit.agent_id()
+    if nid is None and str(session_ref).startswith('wq#') and agent:
         # wq#2901: an identified, ticket-referenced write that memoryd still refused
         # is a governed-path defect, not the ordinary unattributed-CLI case. Label it
         # so one SELECT can count it, and leave a breadcrumb the guard timer alarms on.
         invariant = 'wq2901-memoryd-reject'
-        _breadcrumb_memoryd_reject(fell_back, minerva_audit.agent_id(), session_ref)
+        _breadcrumb_memoryd_reject(fell_back, agent, session_ref)
+    if nid is None and agent:
+        # wq#3173: spool the exact payload so lumen_episode_spool_replay.py can
+        # re-POST it once `agent` holds what the gate needs -- without an agent id
+        # there is nothing a replay could ever authenticate as, so spooling would
+        # just be a file nobody can land.
+        _spool_rejected(kind, summary[:200], content, tags, session_ref, fell_back, agent)
     if nid is None:
         # wq#2772: archival row + audit row + recall_fts event in ONE transaction,
         # committed BEFORE the .md and BEFORE the embed, then read back. Raises
@@ -208,7 +286,7 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
     # a timeout/kill from here on costs only the vector (NULL -> embed guard repairs).
     if embed and direct_write:
         mm.embed_note(nid)
-    return nid
+    return nid, fell_back
 
 def recall(query, top_k=6):
     # Memory V3 P2 (2026-08-07): hybrid indexed recall (dense+lex+graph+recency).
@@ -354,13 +432,25 @@ def _main():
         # in minerva.db; the "committed" line is printed only after read-back, and
         # BEFORE the embed, so a caller timeout during embed still saw the truth.
         try:
-            nid = commit(a.summary, changed=sp(a.changed), worked=sp(a.worked),
-                         failed=sp(a.failed), why=a.why, kind=kind,
-                         tags=sp(a.tags), session_ref=a.ref,
-                         stated_by_frank=a.stated_by_frank, embed=False)
+            nid, reject_reason = commit(
+                a.summary, changed=sp(a.changed), worked=sp(a.worked),
+                failed=sp(a.failed), why=a.why, kind=kind,
+                tags=sp(a.tags), session_ref=a.ref,
+                stated_by_frank=a.stated_by_frank, embed=False)
         except mm.NotPersisted as e:
             print(f'EPISODE NOT PERSISTED: {e}', file=sys.stderr, flush=True)
             sys.exit(3)
+        # wq#3173: a memoryd reject used to end in the same "committed" line as a real
+        # accept -- the session had no way to tell its episode never reached the
+        # governed audit trail. The reason is now the FIRST line out, exit is non-zero,
+        # and the payload is durable in EPISODE_SPOOL_DIR for a timer to replay.
+        if reject_reason:
+            print(f'lumen_episode: memoryd rejected commit: {reject_reason}',
+                  file=sys.stderr, flush=True)
+            print(f'committed episode {nid} to the LOCAL store only '
+                  f'(db-verified) -- spooled to {EPISODE_SPOOL_DIR} for replay', flush=True)
+            mm.embed_note(nid)
+            sys.exit(4)
         print(f'committed episode {nid} (db-verified: archival_notes + recall_fts)', flush=True)
         mm.embed_note(nid)
 

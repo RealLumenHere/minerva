@@ -1,0 +1,10 @@
+[Unit]
+Description=Drain ~/.episode_spool/ every 15min (installed DISABLED; Frank-gated enable)
+
+[Timer]
+OnCalendar=*-*-* *:0/15:00 UTC
+Persistent=false
+RandomizedDelaySec=60
+
+[Install]
+WantedBy=timers.target
