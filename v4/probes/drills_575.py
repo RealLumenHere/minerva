@@ -543,6 +543,11 @@ if __name__ == "__main__":
         # an already-open ticket a second time is a no-op, not an error.
         subprocess.run(["/home/lumen/bin/wq", "release", SRC_TICKET, "--agent", AGENT],
                        capture_output=True, text=True, timeout=60)
+        # wq#3087: release returns the throwaway to open, where any worker can
+        # claim it (8 piled up before this). Retire it; wq accepts the non-owner edit.
+        subprocess.run(["/home/lumen/bin/wq", "edit", SRC_TICKET, "--status", "cancelled"],
+                       capture_output=True, text=True, timeout=60,
+                       env=dict(os.environ, WQ_AGENT=AGENT))
     if AGENT_MINTED:
         subprocess.run(["/home/lumen/bin/wq", "whoami", "--release", "--force"],
                        capture_output=True, text=True, timeout=60,
