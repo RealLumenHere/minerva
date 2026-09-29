@@ -102,13 +102,24 @@ class Kernel:
         self._screens = [re.compile(p) for p in self.contract.get("screen", {}).get("injection_markers", [])]
 
     # ---- helpers ----------------------------------------------------------
-    # Busy-wait before SQLITE_BUSY. Class attribute so tests can shrink it; the
-    # live daemon keeps the historical 5s.
-    busy_timeout_s = 5.0
+    # Busy-wait before SQLITE_BUSY. Class attribute so tests can shrink it.
+    # wq#2930: 5s -> 30s. minerva.db is WAL since wq#2907, where a writer queues
+    # on this timeout instead of failing at once, so a short contention window
+    # (a backup, a migration, another lane's commit) is absorbed rather than
+    # surfacing as SQLITE_BUSY. Readers never wait on it in WAL.
+    busy_timeout_s = 30.0
 
     def connect(self):
         con = sqlite3.connect(self.db_path, timeout=self.busy_timeout_s, isolation_level=None)
         con.row_factory = sqlite3.Row
+        # wq#2930: synchronous is per-connection and the WAL migration does not
+        # persist it. NORMAL is the WAL pairing: a power loss can roll back to the
+        # last checkpointed commit but never corrupts. Only set it when the db is
+        # actually WAL: under journal_mode=delete NORMAL is a real durability
+        # loss, and a restored pre-WAL backup (the wq#2907 rollback path) would
+        # otherwise inherit it silently.
+        if con.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal":
+            con.execute("PRAGMA synchronous=NORMAL")
         return con
 
     # wq#2895: the ONLY sanctioned way to open a write transaction outside this

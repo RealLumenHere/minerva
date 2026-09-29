@@ -65,6 +65,57 @@ def alarm(title, msg, prio='high', quiet=False):
         print(f'  ntfy dispatch failed: {e}', file=sys.stderr)
 
 
+# wq#2930 (class fix from wq#2907, same guard class as ir-triage). 2026-09-28 a leaked
+# BEGIN IMMEDIATE held minerva.db's write lock for 35 min; this guard's catch-all turned
+# 'database is locked' into exit 2, a failed oneshot unit, restart/alert spam. A held lock
+# is not a fault in the embedding store: retry with backoff, and if it outlasts every
+# retry raise ONE deduped aq row and exit 0. The aq row is the alert (wq#2570/2571); the
+# next hourly fire retries the whole pass.
+AQ_BIN = '/home/lumen/bin/aq'
+LOCK_BACKOFF_S = (5, 15, 45)
+
+
+def _is_locked(e):
+    return isinstance(e, sqlite3.OperationalError) and (
+        'locked' in str(e) or 'busy' in str(e))
+
+
+def alert_db_locked(message):
+    """One deduped aq row (source=memory-embed-guard, key=minerva-db-locked).
+    Best-effort: a missing aq binary only logs."""
+    try:
+        subprocess.run([AQ_BIN, 'add', 'memory-embed-guard', 'minerva-db-locked',
+                        'memory-embed-guard: minerva.db locked, pass skipped', message],
+                       check=False, timeout=30)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f'  aq unavailable ({e}); lock alert dropped', file=sys.stderr)
+
+
+def run_with_lock_retry(fn, alert=True):
+    """Run fn() (a full guard pass; idempotent) and return its exit code. A locked
+    minerva.db is retried on LOCK_BACKOFF_S; if it outlasts them, alert once and
+    return 0. Any other exception propagates to the caller's crash path."""
+    for delay in LOCK_BACKOFF_S:
+        try:
+            return fn()
+        except sqlite3.OperationalError as e:
+            if not _is_locked(e):
+                raise
+            print(f'  minerva.db locked ({e}); retrying in {delay}s', file=sys.stderr)
+            time.sleep(delay)
+    try:
+        return fn()
+    except sqlite3.OperationalError as e:
+        if not _is_locked(e):
+            raise
+        print(f'  minerva.db still locked after {len(LOCK_BACKOFF_S)} retries: {e}',
+              file=sys.stderr)
+        if alert:
+            alert_db_locked(f'held lock outlasted {len(LOCK_BACKOFF_S)} retries ({e}); '
+                            'guard pass skipped, the next timer fire retries it')
+        return 0
+
+
 def scan(conn):
     """Return (total, malformed_ids, length_histogram). Read-only."""
     total = conn.execute('SELECT COUNT(*) FROM archival_notes').fetchone()[0]
@@ -158,17 +209,21 @@ def main():
     try:
         conn = sqlite3.connect(DB, timeout=30)
     except Exception as e:
+        if _is_locked(e):
+            raise   # wq#2930: a held lock is retried by run_with_lock_retry, not a BROKE alarm
         alarm('memory embed guard BROKE', f'cannot open {DB}: {e}', quiet=a.quiet)
         return 2
 
-    total, bad, hist = scan(conn)
-    print(f'[{_now()}] archival_notes={total}  malformed={len(bad)}  lengths={hist}')
+    try:   # wq#2930: close on every exit path; a retry must not inherit a live handle
+        total, bad, hist = scan(conn)
+        print(f'[{_now()}] archival_notes={total}  malformed={len(bad)}  lengths={hist}')
 
-    repaired, still = 0, list(bad)
-    if bad and not a.check:
-        repaired, still = repair(conn, bad)
-        print(f'  repaired {repaired}/{len(bad)}; still broken: {still or "none"}')
-    conn.close()
+        repaired, still = 0, list(bad)
+        if bad and not a.check:
+            repaired, still = repair(conn, bad)
+            print(f'  repaired {repaired}/{len(bad)}; still broken: {still or "none"}')
+    finally:
+        conn.close()
 
     healthy, detail = probe_v3()
     print(f'  v3 probe: {"PASS" if healthy else "FAIL"} - {detail}')
@@ -213,7 +268,7 @@ def main():
 
 if __name__ == '__main__':
     try:
-        sys.exit(main())
+        sys.exit(run_with_lock_retry(main, alert='--check' not in sys.argv))
     except Exception as e:
         print(f'guard crashed: {type(e).__name__}: {e}', file=sys.stderr)
         alarm('memory embed guard CRASHED', f'{type(e).__name__}: {e}')

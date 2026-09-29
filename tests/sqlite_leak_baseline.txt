@@ -33,7 +33,6 @@ UNGUARDED::lumen_proposal_digest.py::_probe_stack_versions()::var=conn
 UNGUARDED::lumen_state_single_owner_migrate.py::backup()::var=d
 UNGUARDED::lumen_state_single_owner_migrate.py::backup()::var=s
 UNGUARDED::lumen_state_single_owner_migrate.py::run()::var=conn
-UNGUARDED::memory_embed_guard.py::main()::var=conn
 UNGUARDED::minerva_brief.py::gather_data()::var=conn
 UNGUARDED::minerva_classifier.py::get_unprocessed_intel()::var=conn
 UNGUARDED::minerva_classifier.py::save_classification()::var=conn

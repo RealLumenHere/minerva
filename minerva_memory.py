@@ -134,7 +134,7 @@ def cosine(a, b):
 
 def _ensure_recall_fts():
     """Create the FTS5 virtual table for recall if missing."""
-    conn = sqlite3.connect(DB)
+    conn = sqlite3.connect(DB, timeout=DB_TIMEOUT)   # wq#2930: DDL path, was the 5s default
     try:   # wq#2895: close on every exit path (runs in lumen-memoryd via search())
         # Check if FTS5 is available
         try:
