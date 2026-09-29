@@ -65,6 +65,9 @@ import minerva_memory as mm  # noqa: E402  embed(), decode_embedding(), cosine()
 import numpy as np  # noqa: E402
 import lumen_dream  # noqa: E402  stale_prose_scan()
 
+sys.path.insert(0, '/home/lumen/foreman/harness')
+from masking import mask_text  # noqa: E402  wq#3183: mask prose_restore pre-images at write time
+
 DB = os.environ.get('MINERVA_DB', '/home/lumen/minerva/minerva.db')
 MEM = Path('/home/lumen/claude_memory.md')
 ARC = Path('/home/lumen/minerva/context/claude_memory_archive.md')
@@ -357,7 +360,7 @@ def apply_plan(path, confirm=False, db=None):
     con = sqlite3.connect(db_path, timeout=30)
     try:
         for s, c in demote:
-            (RESTORE_DIR / f'{s["id"]}__{ts_tag}.md').write_text(s['raw'])
+            (RESTORE_DIR / f'{s["id"]}__{ts_tag}.md').write_text(mask_text(s['raw']))
             con.execute(
                 'INSERT INTO prose_demotions(section_id,title,demoted_at,reason,'
                 'age_days,hits,note_cov,live_sha_pre,archive_sha_post,plan_ref) '
