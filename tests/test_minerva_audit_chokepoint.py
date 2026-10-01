@@ -184,11 +184,14 @@ def test_unreachable_queue_db_does_not_fail_the_ingest(db, monkeypatch):
 # ── CLI episode commit (§1.4): memoryd first, audited fallback second ───────
 
 @pytest.fixture
-def episode(db, monkeypatch):
+def episode(db, monkeypatch, tmp_path):
     """lumen_episode with its embedding/FTS/ledger satellites stubbed: this suite
     tests the write path and its audit row, not the recall stack."""
     import minerva_memory as mm
     import lumen_episode as le
+    # wq#3267: a CLI commit that falls back also spools to EPISODE_SPOOL_DIR; unredirected,
+    # every guard run (6h) dropped a synthetic wq1634-a1 file into the real ~/.episode_spool.
+    monkeypatch.setattr(le, "EPISODE_SPOOL_DIR", str(tmp_path / "episode_spool"))
     monkeypatch.setattr(mm, 'DB', ls.DB)
     monkeypatch.setattr(mm, 'ARCHIVAL_DIR', __import__('pathlib').Path(ls.DB).parent / 'archival')
     monkeypatch.setattr(mm, 'embed', lambda *a, **k: None)

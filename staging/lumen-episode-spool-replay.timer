@@ -1,5 +1,5 @@
 [Unit]
-Description=Drain ~/.episode_spool/ every 15min (installed DISABLED; Frank-gated enable)
+Description=Drain ~/.episode_spool/ every 15min (wq#3173, installed+enabled wq#3267)
 
 [Timer]
 OnCalendar=*-*-* *:0/15:00 UTC
