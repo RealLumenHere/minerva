@@ -145,7 +145,16 @@ class Handler(BaseHTTPRequestHandler):
             tid = src[3:]
             claims = K.agent_claims(agent)
             if tid not in claims:
-                return None, "agent does not hold a live claim on %s" % src
+                # wq#3352: agent_claims() answers the live-lease question, which a
+                # session that just closed its own ticket (`wq done`) always fails —
+                # the lease clears on close, same as it does for a fworker identity
+                # (wq#2901). The claim RECEIPT survives the close and is written only
+                # by `wq claim`, so fall back to the same provenance check the
+                # fworker branch above already trusts (kernel.py:327
+                # ticket_claimant, "any status") before refusing a write the session
+                # legitimately earned.
+                if K.ticket_claimant(tid) != agent:
+                    return None, "agent does not hold a live claim on %s" % src
             lane = K.ticket_lane(tid)
             if not lane:
                 return None, "cannot resolve lane for %s" % src
