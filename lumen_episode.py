@@ -167,6 +167,32 @@ def _spool_rejected(kind, title, content, tags, source_ref, reason, agent):
         return None
 
 
+def _stamp_spool_local_nid(name, nid):
+    """wq#3309: stamp the fallback write's deterministic note id into the spool
+    entry so the replayer can verify local durability without recomputing.
+    Best-effort and advisory only -- replay trusts-but-reverifies the stamp, and
+    a legacy/unstamped entry recomputes via mm.note_id(). Never raises."""
+    try:
+        path = os.path.join(EPISODE_SPOOL_DIR, name)
+        with open(path) as f:
+            entry = json.load(f)
+        entry['local_nid'] = nid
+        fd, tmp = tempfile.mkstemp(dir=EPISODE_SPOOL_DIR, prefix='.tmp-')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                json.dump(entry, f)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception:
+        pass
+
+
 def _memoryd_commit(kind, title, content, tags, source_ref):
     """POST the note to memoryd (wq#1634 / §4.5). Returns (note_id, None) when the
     daemon accepted it -- the kernel wrote the audit row itself -- or (None, why)
@@ -236,12 +262,14 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
         # so one SELECT can count it, and leave a breadcrumb the guard timer alarms on.
         invariant = 'wq2901-memoryd-reject'
         _breadcrumb_memoryd_reject(fell_back, agent, session_ref)
+    spool_name = None
     if nid is None and agent:
         # wq#3173: spool the exact payload so lumen_episode_spool_replay.py can
         # re-POST it once `agent` holds what the gate needs -- without an agent id
         # there is nothing a replay could ever authenticate as, so spooling would
         # just be a file nobody can land.
-        _spool_rejected(kind, summary[:200], content, tags, session_ref, fell_back, agent)
+        spool_name = _spool_rejected(kind, summary[:200], content, tags, session_ref,
+                                     fell_back, agent)
     if nid is None:
         # wq#2772: archival row + audit row + recall_fts event in ONE transaction,
         # committed BEFORE the .md and BEFORE the embed, then read back. Raises
@@ -253,6 +281,10 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
                    'source_kind': minerva_audit.resolve_source_kind(stated_by_frank),
                    'invariant': invariant},
             recall_event=(kind, ev_text, session_ref or None), embed_now=False)
+        if spool_name:
+            # wq#3309: the local copy is now durable (write_note_verified read it
+            # back) -- stamp its id so replay can verify without recomputing.
+            _stamp_spool_local_nid(spool_name, nid)
     else:
         rowid = mm.log_event(kind, ev_text, ref=session_ref or nid)
         missing = mm.verify_landed(nid, rowid, require_fts=True)

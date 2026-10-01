@@ -168,6 +168,19 @@ def note_id(kind, title, content):
     return hashlib.md5(f'{kind}:{title}:{content[:200]}'.encode()).hexdigest()[:12]
 
 
+def note_exists(nid):
+    """wq#3309: read-only probe for the spool replayer's verify-then-move --
+    note ids are deterministic (note_id above), so presence of the row IS proof
+    the content already landed in the archival store. Raises on an unreadable
+    DB: the caller must fail toward retry, never toward 'assume it landed'."""
+    conn = sqlite3.connect(f'file:{DB}?mode=ro', uri=True, timeout=DB_TIMEOUT)
+    try:
+        return conn.execute('SELECT 1 FROM archival_notes WHERE id=?',
+                            (nid,)).fetchone() is not None
+    finally:
+        conn.close()
+
+
 def _write_md(nid, kind, title, content, tags, source_ref, created_at):
     """Archival .md mirror. Written AFTER the DB commit (wq#2772) and atomically
     (tmp + rename), so a crash can never leave a .md that recall cannot see."""

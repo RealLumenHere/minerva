@@ -7,8 +7,10 @@ EPISODE_SPOOL_DIR, and lumen_episode_spool_replay.py drains that spool.
 import io
 import json
 import os
+import sqlite3
 import sys
 import urllib.error
+from datetime import datetime, timezone
 
 import pytest
 
@@ -23,6 +25,17 @@ def spool_dir(monkeypatch, tmp_path):
     d = tmp_path / "spool"
     monkeypatch.setattr(le, "EPISODE_SPOOL_DIR", str(d))
     return d
+
+
+@pytest.fixture(autouse=True)
+def hermetic_queue_db(monkeypatch, tmp_path):
+    """wq#3309: the replayer now reads queue.db before every POST. No test in
+    this module may touch the live one -- point both readers at a tmp path
+    (absent until a test builds it, which exercises the fail-open-to-retry arm)."""
+    db = tmp_path / "queue.db"
+    monkeypatch.setattr(replay, "QUEUE_DB", str(db))
+    monkeypatch.setattr(replay.minerva_audit, "QUEUE_DB", str(db))
+    return db
 
 
 # ---- _spool_rejected ------------------------------------------------------
@@ -243,3 +256,221 @@ def test_main_reports_empty_spool(spool_dir, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["lumen_episode_spool_replay.py"])
     assert replay.main() == 0
     assert "spool empty" in capsys.readouterr().out
+
+
+# ---- wq#3309: terminal state (recovered/) + terminality pre-check ----------
+
+OLD_TS = "2026-09-29T00:00:00+00:00"   # well past GRACE_HOURS, well under MAX_AGE_DAYS
+
+
+def _make_queue_db(path, sessions=(), retired=(), tasks=()):
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE IF NOT EXISTS agent_sessions "
+                 "(session_id TEXT PRIMARY KEY, last_seen TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS retired_sessions "
+                 "(session_id TEXT PRIMARY KEY, base_name TEXT, retired_at TEXT, "
+                 "kind TEXT, reason TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS tasks "
+                 "(id INTEGER PRIMARY KEY, lane TEXT, claimed_by TEXT)")
+    for s in sessions:
+        conn.execute("INSERT INTO agent_sessions VALUES (?, '2026-10-01')", (s,))
+    for s in retired:
+        conn.execute("INSERT INTO retired_sessions VALUES (?, ?, '2026-10-01', 'k', 'r')",
+                     (s, s))
+    for tid, lane, claimant in tasks:
+        conn.execute("INSERT INTO tasks VALUES (?,?,?)", (tid, lane, claimant))
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def mem_db(monkeypatch, tmp_path):
+    """Hermetic archival store: real note_exists/write_note_verified/audit code
+    paths, tmp sqlite + tmp archival dir + tmp log."""
+    db = tmp_path / "minerva.db"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE archival_notes (id TEXT PRIMARY KEY, kind TEXT, "
+                 "title TEXT, content TEXT, embedding BLOB, tags TEXT, "
+                 "source_ref TEXT, created_at TEXT, origin TEXT, trust TEXT)")
+    conn.commit()
+    conn.close()
+    monkeypatch.setattr(replay.mm, "DB", db)
+    monkeypatch.setattr(replay.mm, "ARCHIVAL_DIR", tmp_path / "archival")
+    monkeypatch.setattr(replay.mm, "LOG", tmp_path / "memory.log")
+    return db
+
+
+def _seed_local_note(db, kind="session", title="t", content="c"):
+    nid = replay.mm.note_id(kind, title, content)
+    conn = sqlite3.connect(db)
+    conn.execute("INSERT INTO archival_notes (id, kind, title, content) "
+                 "VALUES (?,?,?,?)", (nid, kind, title, content))
+    conn.commit()
+    conn.close()
+    return nid
+
+
+def _audit_rows(db):
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute("SELECT invariant, detail FROM memory_audit").fetchall()
+    except sqlite3.OperationalError:
+        return []   # table never created == no audit row was ever written
+    finally:
+        conn.close()
+
+
+@pytest.fixture
+def no_post(monkeypatch):
+    """A terminal entry must be recovered WITHOUT a POST."""
+    def boom(*a, **k):
+        raise AssertionError("POST must not happen for a terminal entry")
+    monkeypatch.setattr(replay.le, "_memoryd_commit", boom)
+
+
+@pytest.fixture
+def reject_post(monkeypatch):
+    monkeypatch.setattr(replay.le, "_memoryd_commit",
+                        lambda *a, **k: (None, "agent does not hold a live claim on wq#3173"))
+
+
+def test_purged_agent_with_local_copy_recovers_without_post(
+        tmp_path, hermetic_queue_db, mem_db, no_post):
+    # design §5.1: R1 -- registry readable, id absent (purged), content local.
+    _make_queue_db(hermetic_queue_db)  # schema present, agent row absent
+    nid = _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="wall-5-f539f2",
+                              spooled_at=OLD_TS, attempts=32)
+    outcome, detail = replay.replay_one(str(path))
+    assert outcome == "recovered-local"
+    assert not path.exists()
+    moved = tmp_path / "spool" / "recovered" / path.name
+    assert moved.exists()
+    rec = json.loads(moved.read_text())
+    assert rec["recovery"] == "local-only"
+    assert rec["local_nid"] == nid
+    assert "purged/retired" in rec["final_reason"]
+    assert rec["recovered_at"]
+    rows = _audit_rows(mem_db)
+    assert len(rows) == 1
+    assert rows[0][0] == "wq3309-recovered-local"
+    assert "wall-5-f539f2" in rows[0][1]
+
+
+def test_purged_agent_without_local_copy_gets_local_write(
+        tmp_path, hermetic_queue_db, mem_db, no_post):
+    # design §5.2: the spool held the only copy -- replayer writes it locally
+    # through the existing fallback writer (NOT a daemon privilege), then recovers.
+    _make_queue_db(hermetic_queue_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="mega-d-0961f0",
+                              spooled_at=OLD_TS, attempts=4)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "recovered-local"
+    rec = json.loads((tmp_path / "spool" / "recovered" / path.name).read_text())
+    assert rec["recovery"] == "local-write"
+    assert replay.mm.note_exists(rec["local_nid"])
+    rows = _audit_rows(mem_db)
+    assert len(rows) == 1
+    assert rows[0][0] == "wq3309-recovered-local"
+    assert "mega-d-0961f0" in rows[0][1]        # original agent in the audit detail
+    assert "unreplayable" in rows[0][1]
+
+
+def test_missing_source_ref_is_terminal_at_attempts_zero(
+        tmp_path, hermetic_queue_db, mem_db, no_post):
+    # design §5.3: R3 is immediate -- no grace window, no 200-attempt burn.
+    _make_queue_db(hermetic_queue_db)
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="megac2-d7372d",
+                              source_ref="", attempts=0,
+                              spooled_at=datetime.now(timezone.utc).isoformat())
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "recovered-local"
+    rec = json.loads((tmp_path / "spool" / "recovered" / path.name).read_text())
+    assert rec["attempts"] == 0
+    assert "R3" in rec["final_reason"]
+
+
+def test_still_registered_agent_is_not_recovered(
+        tmp_path, hermetic_queue_db, mem_db, reject_post):
+    # design §5.4, the can-fail probe (wq#2630): drawn from OUTSIDE the fix's
+    # target population -- agent present in agent_sessions, local copy present,
+    # so over-eager recovery WOULD trigger here and fail this test.
+    _make_queue_db(hermetic_queue_db, sessions=["wall-5-alive99"])
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="wall-5-alive99",
+                              spooled_at=OLD_TS, attempts=3)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "still-rejected"
+    assert path.exists()
+    assert not (tmp_path / "spool" / "recovered").exists()
+    assert _audit_rows(mem_db) == []
+
+
+def test_fworker_with_intact_claim_receipt_is_retried(
+        tmp_path, hermetic_queue_db, mem_db, reject_post):
+    # design §5.5a: claimed_by still names this fworker -- R4 cannot occur.
+    _make_queue_db(hermetic_queue_db, tasks=[(77, "build", "fworker-wq77")])
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="fworker-wq77",
+                              source_ref="wq#77", spooled_at=OLD_TS)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "still-rejected"
+    assert path.exists()
+
+
+def test_fworker_with_reclaimed_receipt_is_recovered(
+        tmp_path, hermetic_queue_db, mem_db, no_post):
+    # design §5.5b: the claim receipt was overwritten by a re-claim (survives
+    # close, kernel.py ticket_claimant) -- it will never name this fworker again.
+    _make_queue_db(hermetic_queue_db, tasks=[(77, "build", "orch-rescue-1")])
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="fworker-wq77",
+                              source_ref="wq#77", spooled_at=OLD_TS)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "recovered-local"
+    rec = json.loads((tmp_path / "spool" / "recovered" / path.name).read_text())
+    assert "orch-rescue-1" in rec["final_reason"]
+
+
+def test_unregistered_agent_inside_grace_window_is_retried(
+        tmp_path, hermetic_queue_db, mem_db, reject_post):
+    # design §5.6: a fresh entry may just be racing registration.
+    _make_queue_db(hermetic_queue_db)
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="wall-5-newborn1",
+                              spooled_at=datetime.now(timezone.utc).isoformat())
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "still-rejected"
+    assert path.exists()
+
+
+def test_unreadable_queue_db_fails_open_to_retry(
+        tmp_path, hermetic_queue_db, mem_db, reject_post):
+    # design §5.7: hermetic_queue_db points at a path that does not exist.
+    assert not hermetic_queue_db.exists()
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="wall-5-f539f2",
+                              spooled_at=OLD_TS)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "still-rejected"
+    assert path.exists()
+
+
+def test_retry_budget_trimmed_to_96():
+    # design §4: terminal classes exit eagerly, so MAX_ATTEMPTS no longer doubles
+    # as the dead-identity backstop (~24 h at 15-min cadence, was ~50 h).
+    assert replay.MAX_ATTEMPTS == 96
+
+
+def test_commit_stamps_local_nid_into_spool_entry(spool_dir, stub_mm, monkeypatch):
+    # design §3: commit() stamps the fallback write's note id into the spool file
+    # so replay can verify local durability without recomputing.
+    monkeypatch.setattr(le, "_memoryd_commit",
+                        lambda *a, **k: (None, "agent does not hold a live claim on wq#3173"))
+    monkeypatch.setattr(le.minerva_audit, "agent_id", lambda: "fworker-wq3173")
+    nid, _ = le.commit("did a thing", session_ref="wq#3173", kind="session", embed=False)
+    assert nid == "local-note-1"
+    files = list(spool_dir.glob("*.json"))
+    assert len(files) == 1
+    assert json.loads(files[0].read_text())["local_nid"] == "local-note-1"
