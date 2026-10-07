@@ -161,7 +161,13 @@ def _wq_add(title, detail, wq_bin=WQ_BIN):
     out = subprocess.run(
         [wq_bin, 'add', '--lane', 'user', '--pri', '2', '--title', title,
          '--detail', detail, '--no-probe',
-         'drift-notice ticket, superseded by next daily check, no deterministic probe'],
+         'drift-notice ticket, superseded by next daily check, no deterministic probe',
+         # wq#3504: wq add's duplicate-title guard refused this call whenever the previous
+         # drift ticket was still open (exactly the case _wq_supersede exists for, but it
+         # only runs AFTER a successful add) -> crash -> failed unit -> sentinel ticket that
+         # could never clear. --force is safe: the prior open ticket of this title is
+         # superseded immediately after in check_and_file_ticket.
+         '--force'],
         capture_output=True, text=True, check=True).stdout
     m = re.search(r'added task (\d+)', out)
     if not m:
