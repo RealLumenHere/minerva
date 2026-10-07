@@ -317,7 +317,8 @@ def _embed_batch(texts: list):
     try:
         # timeout=90: nomic cold-load measured 44.3s; 30s failed on cold paths,
         # which fail-closes the gate for the wrong reason (embed, not judge).
-        r = requests.post(OLLAMA_EMBED_URL, json={'model': EMBED_MODEL, 'input': texts, 'keep_alive': '30m'}, timeout=90)
+        # No keep_alive: a per-request pin starves chat model loads on Lumen (wq#3558).
+        r = requests.post(OLLAMA_EMBED_URL, json={'model': EMBED_MODEL, 'input': texts}, timeout=90)
         if r.status_code != 200:
             return None
         embs = r.json().get('embeddings')

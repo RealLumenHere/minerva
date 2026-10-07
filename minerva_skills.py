@@ -43,7 +43,7 @@ def embed(text):
     try:
         r = requests.post(
             f'{EMBED_URL}/api/embed',
-            json={'model': EMBED_MODEL, 'input': text[:4000], 'keep_alive': '30m'},
+            json={'model': EMBED_MODEL, 'input': text[:4000]},  # no keep_alive: wq#3558
             timeout=90,
         )
         if r.status_code != 200:

@@ -61,7 +61,10 @@ def embed(text, attempts=2):
     # timeout=90: nomic cold-load measured 44.3s (OLLAMA_MAX_LOADED_MODELS=1
     # means every gemma/LFM call evicts it). The old 15s timeout silently
     # dropped embeddings on every cold path - 4 archival notes lost pre-2026-07-27.
-    # keep_alive pins nomic between embeds; other models still evict it when loaded.
+    # No keep_alive (wq#3558): a per-request keep_alive on an already-loaded
+    # model overwrites the scheduler's "unload me" mark (sessionDuration=0) while a
+    # chat model is waiting to evict nomic, so every chat on Lumen hung until the
+    # 30m pin lapsed, and each embed re-armed it. Server OLLAMA_KEEP_ALIVE applies.
     #
     # wq#465 (2026-08-10): a 90s timeout STILL fired once, during the /scratch
     # model-move (cold load + heavy disk I/O), and poisoned the store. Ollama keeps
@@ -72,7 +75,7 @@ def embed(text, attempts=2):
         try:
             r = requests.post(
                 f'{EMBED_URL}/api/embed',
-                json={'model': EMBED_MODEL, 'input': text[:4000], 'keep_alive': '30m'},
+                json={'model': EMBED_MODEL, 'input': text[:4000]},
                 timeout=90,
             )
             if r.status_code != 200:
