@@ -160,21 +160,38 @@ def freshness_warn(header_ts, compare_ts):
 
 
 def cmd_mark_dirty(args):
+    # wq#2900: every CLI entry closes its connection on every exit path, and a write that
+    # fails rolls back before the close so no RESERVED lock outlives the process.
     conn = _conn(args.db)
-    mark_dirty(conn, args.names)
-    conn.commit()
+    try:
+        mark_dirty(conn, args.names)
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     return 0
 
 
 def cmd_clear(args):
     conn = _conn(args.db)
-    clear_dirty(conn, args.names, ts=args.ts)
+    try:
+        clear_dirty(conn, args.names, ts=args.ts)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     return 0
 
 
 def cmd_is_dirty(args):
     conn = _conn(args.db)
-    dirty = any_dirty(conn, args.names)
+    try:
+        dirty = any_dirty(conn, args.names)
+    finally:
+        conn.close()
     print('dirty' if dirty else 'clean')
     return 0 if dirty else 1
 
@@ -187,9 +204,15 @@ def cmd_stamp(args):
 
 def cmd_status(args):
     conn = _conn(args.db)
-    ensure_schema(conn)
-    rows = {r['name']: dict(r) for r in
-            conn.execute('SELECT name, dirty, last_regen_at FROM projection_state')}
+    try:
+        ensure_schema(conn)
+        rows = {r['name']: dict(r) for r in
+                conn.execute('SELECT name, dirty, last_regen_at FROM projection_state')}
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
     for name in STATE_PROJECTIONS:
         rows.setdefault(name, {'name': name, 'dirty': 1, 'last_regen_at': None})
     if args.json:
@@ -202,14 +225,17 @@ def cmd_status(args):
 
 
 def cmd_check_warn(args):
-    conn = _conn(args.db)
     with open(args.file) as f:
         first_line = f.readline()
     store, header_ts = parse_generated_from(first_line)
     if header_ts is None:
         print(f'WARN: {args.file} carries no generated-from header (wq#1633)')
         return 0
-    max_ts = max_ingested_at(conn)
+    conn = _conn(args.db)
+    try:
+        max_ts = max_ingested_at(conn)
+    finally:
+        conn.close()
     if freshness_warn(header_ts, max_ts):
         print(f'WARN: {args.name} generated {header_ts} is older than the latest '
               f'state_facts write {max_ts} (wq#1633) — run state-regen')
