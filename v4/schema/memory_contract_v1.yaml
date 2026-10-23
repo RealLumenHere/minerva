@@ -67,6 +67,13 @@ lanes:
   frank-re:     {archival_notes: write,   state_facts: propose, trust: derived}
   frank-cred:   {archival_notes: write,   state_facts: propose, trust: derived}
   frank-funding: {archival_notes: write,  state_facts: propose, trust: derived}
+  # wq#4538/wq#4559 S2: the synthetic session-anchor lane (dispatcher-disabled in
+  # foreman config — no worker is ever spawned on it). An orchestrator's episode
+  # commits ride its own claimed session ticket, whose lane is read out of the
+  # ticket as `session`; absent from this table that write would be a fail-closed
+  # I-4 reject, which is exactly the wq#2901 lane-gap class. Standard agent-lane
+  # policy.
+  session:      {archival_notes: write,   state_facts: propose, trust: derived}
   # A registered agent session with no held wq claim. READS ONLY: reads are
   # less dangerous than writes (§2.5) and blocking them would starve every
   # lane prompt, which is the one thing _memory_context must never do. Writes

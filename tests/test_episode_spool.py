@@ -10,7 +10,7 @@ import os
 import sqlite3
 import sys
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -34,7 +34,11 @@ def hermetic_queue_db(monkeypatch, tmp_path):
     (absent until a test builds it, which exercises the fail-open-to-retry arm)."""
     db = tmp_path / "queue.db"
     monkeypatch.setattr(replay, "QUEUE_DB", str(db))
+    monkeypatch.setattr(le, "QUEUE_DB", str(db))
     monkeypatch.setattr(replay.minerva_audit, "QUEUE_DB", str(db))
+    # wq#4538: commit() reads this env; a live orch session exporting it must not
+    # leak the S2 fold into unrelated tests.
+    monkeypatch.delenv("WQ_SESSION_TICKET", raising=False)
     return db
 
 
@@ -192,7 +196,7 @@ def _write_spool_entry(spool_dir, name="entry.json", **overrides):
     entry = {
         "agent": "fworker-wq3173", "kind": "session", "title": "t", "content": "c",
         "tags": [], "source_ref": "wq#3173", "reason": "agent does not hold a live claim",
-        "spooled_at": "2026-09-29T00:00:00+00:00", "attempts": 0,
+        "spooled_at": OLD_TS, "attempts": 0,
     }
     entry.update(overrides)
     path = spool_dir / name
@@ -260,7 +264,11 @@ def test_main_reports_empty_spool(spool_dir, monkeypatch, capsys):
 
 # ---- wq#3309: terminal state (recovered/) + terminality pre-check ----------
 
-OLD_TS = "2026-09-29T00:00:00+00:00"   # well past GRACE_HOURS, well under MAX_AGE_DAYS
+# wq#4559: was the literal "2026-09-29T00:00:00+00:00", which aged past
+# MAX_AGE_DAYS 14 days after it was written and flipped every retry-path test
+# to "expired". Relative keeps the invariant the comment always claimed:
+# well past GRACE_HOURS, well under MAX_AGE_DAYS.
+OLD_TS = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
 
 
 def _make_queue_db(path, sessions=(), retired=(), tasks=()):
@@ -461,6 +469,122 @@ def test_retry_budget_trimmed_to_96():
     # design §4: terminal classes exit eagerly, so MAX_ATTEMPTS no longer doubles
     # as the dead-identity backstop (~24 h at 15-min cadence, was ~50 h).
     assert replay.MAX_ATTEMPTS == 96
+
+
+# ---- wq#4538 QW3: R2-terminal — does-not-hold that survives 3 replays -------
+
+DOES_NOT_HOLD = "reject: agent does not hold a live claim on wq#4455,wq#4456"
+
+
+def test_does_not_hold_after_three_replays_is_recovered(
+        tmp_path, hermetic_queue_db, mem_db, no_post):
+    # design wq#4538 test 4: registered non-fworker agent (so R1/R4 cannot fire),
+    # list-form source_ref, attempts=3 with the daemon's does-not-hold reason —
+    # post-wq#3352 the receipt was already consulted, so no replay can change it.
+    _make_queue_db(hermetic_queue_db, sessions=["orch-main-aa11bb"])
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="orch-main-aa11bb",
+                              source_ref="wq#4455,wq#4456", spooled_at=OLD_TS,
+                              attempts=3, last_reason=DOES_NOT_HOLD)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "recovered-local"
+    rec = json.loads((tmp_path / "spool" / "recovered" / path.name).read_text())
+    assert "R2-terminal" in rec["final_reason"]
+    assert rec["attempts"] == 3
+
+
+def test_does_not_hold_at_two_attempts_is_still_retried(
+        tmp_path, hermetic_queue_db, mem_db, reject_post):
+    # design wq#4538 test 5 (wq#2630 can-fail): identical entry one replay short
+    # of the threshold — over-eager recovery WOULD trigger here and fail this test.
+    _make_queue_db(hermetic_queue_db, sessions=["orch-main-aa11bb"])
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="orch-main-aa11bb",
+                              source_ref="wq#4455,wq#4456", spooled_at=OLD_TS,
+                              attempts=2, last_reason=DOES_NOT_HOLD)
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "still-rejected"
+    assert path.exists()
+    assert not (tmp_path / "spool" / "recovered").exists()
+
+
+def test_transient_reason_at_high_attempts_is_still_retried(
+        tmp_path, hermetic_queue_db, mem_db, reject_post):
+    # design wq#4538 test 6 (can-fail): attempts past the threshold but a
+    # transient reason class — R2-terminal must key on the reason, not the count.
+    _make_queue_db(hermetic_queue_db, sessions=["orch-main-aa11bb"])
+    _seed_local_note(mem_db)
+    path = _write_spool_entry(tmp_path / "spool", agent="orch-main-aa11bb",
+                              source_ref="wq#4455,wq#4456", spooled_at=OLD_TS,
+                              attempts=5, last_reason="commit HTTP 503")
+    outcome, _ = replay.replay_one(str(path))
+    assert outcome == "still-rejected"
+    assert path.exists()
+    assert not (tmp_path / "spool" / "recovered").exists()
+
+
+# ---- wq#4538 S2 client: fold unverifiable refs under the session anchor -----
+
+@pytest.fixture
+def capture_commit(monkeypatch):
+    seen = {}
+
+    def fake_commit(kind, title, content, tags, source_ref):
+        seen.update(kind=kind, title=title, content=content,
+                    tags=tags, source_ref=source_ref)
+        return "memoryd-note-1", None
+
+    monkeypatch.setattr(le, "_memoryd_commit", fake_commit)
+    return seen
+
+
+def test_commit_folds_range_ref_under_session_anchor(
+        spool_dir, stub_mm, monkeypatch, hermetic_queue_db, capture_commit):
+    # design wq#4538 test 7: an orch cites a range it shepherded; I-7 can only
+    # verify the held anchor — ref moves to content/tags, source_ref = anchor.
+    monkeypatch.setenv("WQ_SESSION_TICKET", "wq#9000")
+    monkeypatch.setattr(le.minerva_audit, "agent_id", lambda: "orch-main-aa11bb")
+    nid, reason = le.commit("shepherded a batch", session_ref="wq#4470-4474",
+                            kind="session", embed=False)
+    assert nid == "memoryd-note-1"
+    assert capture_commit["source_ref"] == "wq#9000"
+    assert "## Tickets\nwq#4470-4474" in capture_commit["content"]
+    assert "tickets:wq#4470-4474" in capture_commit["tags"]
+
+
+def test_commit_leaves_own_claimed_single_ref_alone(
+        spool_dir, stub_mm, monkeypatch, hermetic_queue_db, capture_commit):
+    # design wq#4538 test 7 can-fail: the fworker path must NOT be rewritten —
+    # a single wq#N whose claim receipt names the committer goes through verbatim.
+    _make_queue_db(hermetic_queue_db, tasks=[(3173, "build", "fworker-wq3173")])
+    monkeypatch.setenv("WQ_SESSION_TICKET", "wq#9000")
+    monkeypatch.setattr(le.minerva_audit, "agent_id", lambda: "fworker-wq3173")
+    le.commit("did my ticket", session_ref="wq#3173", kind="session", embed=False)
+    assert capture_commit["source_ref"] == "wq#3173"
+    assert "## Tickets" not in capture_commit["content"]
+    assert not any(t.startswith("tickets:") for t in capture_commit["tags"] or [])
+
+
+def test_commit_folds_other_agents_single_ref(
+        spool_dir, stub_mm, monkeypatch, hermetic_queue_db, capture_commit):
+    # A single wq#N whose receipt names someone else is exactly the 314-a-week
+    # reject class from the wq#4538 problem statement — folded under the anchor.
+    _make_queue_db(hermetic_queue_db, tasks=[(4469, "build", "fworker-wq4469")])
+    monkeypatch.setenv("WQ_SESSION_TICKET", "wq#9000")
+    monkeypatch.setattr(le.minerva_audit, "agent_id", lambda: "orch-main-aa11bb")
+    le.commit("shepherded one", session_ref="wq#4469", kind="session", embed=False)
+    assert capture_commit["source_ref"] == "wq#9000"
+    assert "## Tickets\nwq#4469" in capture_commit["content"]
+
+
+def test_commit_without_anchor_is_unchanged(
+        spool_dir, stub_mm, monkeypatch, hermetic_queue_db, capture_commit):
+    # No WQ_SESSION_TICKET → today's behavior exactly (reject → fallback → spool).
+    monkeypatch.setattr(le.minerva_audit, "agent_id", lambda: "orch-main-aa11bb")
+    le.commit("shepherded a batch", session_ref="wq#4470-4474",
+              kind="session", embed=False)
+    assert capture_commit["source_ref"] == "wq#4470-4474"
+    assert "## Tickets" not in capture_commit["content"]
 
 
 def test_commit_stamps_local_nid_into_spool_entry(spool_dir, stub_mm, monkeypatch):

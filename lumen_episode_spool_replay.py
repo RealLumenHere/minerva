@@ -20,7 +20,8 @@ a still-rejected one is rewritten in place with an updated reason/attempt count.
 
 wq#3309 TERMINAL STATE: an entry whose originating identity can never authenticate
 again (purged/retired session, missing source_ref, re-claimed fworker receipt -- see
-design/wq3309_spool_terminal_state.md in foreman) is classified BEFORE the POST,
+design/wq3309_spool_terminal_state.md in foreman -- or, wq#4538, a does-not-hold
+reject that survived 3 replays of the identical payload) is classified BEFORE the POST,
 its content verified in the local archival store (written there via the existing
 local fallback writer when the spool holds the only copy), and the file moved to
 spool/recovered/ -- instead of burning MAX_ATTEMPTS futile POSTs into expired/.
@@ -121,6 +122,15 @@ def _identity_terminal(entry):
         # R3: replay re-POSTs the identical payload; nothing about a retry adds
         # a source_ref. Terminal immediately, attempts=0.
         return True, 'no source_ref; a retry can never add one (R3)'
+    # R2→terminal (wq#4538): post-wq#3352 the daemon already consults the claim
+    # receipt before emitting "does not hold", so a does-not-hold that survives 3
+    # replays (~45 min, outlasting any claim/registration race) means the receipt
+    # names someone else or nobody — a state no future replay of the identical
+    # payload can change. Covers both the session branch ("a live claim on") and
+    # the fworker branch ("the claim on") message forms.
+    if (int(entry.get('attempts', 0)) >= 3
+            and str(entry.get('last_reason', '')).startswith('reject: agent does not hold')):
+        return True, 'does-not-hold ×%d; receipt will never name this agent (R2-terminal)' % entry['attempts']
     if _age_days(entry) * 24.0 < GRACE_HOURS:
         return False, 'inside registration grace window'
     if _session_retired(agent):

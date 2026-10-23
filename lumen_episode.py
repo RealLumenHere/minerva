@@ -41,7 +41,7 @@ Now: exit 4, reason first line on stderr, payload spooled to EPISODE_SPOOL_DIR f
 lumen_episode_spool_replay.py (lumen-episode-spool-replay.timer) to retry once the
 same agent id can pass the gate.
 """
-import os, json, sys, argparse, tempfile, uuid
+import os, json, re, sqlite3, sys, argparse, tempfile, uuid
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -67,6 +67,9 @@ MEMORYD_REJECT_MARKER = '/home/lumen/minerva/logs/memoryd_reject.json'
 # via lumen_episode_spool_replay.py (lumen-episode-spool-replay.timer) gives the reject
 # a durable, retryable record instead of a silent local-only note.
 EPISODE_SPOOL_DIR = os.environ.get('EPISODE_SPOOL_DIR', os.path.expanduser('~/.episode_spool'))
+
+# wq#4538: same path + env override as kernel.py / lumen_episode_spool_replay.py.
+QUEUE_DB = os.environ.get('WQ_QUEUE_DB', '/home/lumen/agents/work-queue/queue.db')
 
 # wq#2901 I-4: --kind took any string while memoryd enforces a closed set, so
 # `verify`, `investigation` and `bugfix` each became a 422 the caller never saw --
@@ -236,6 +239,29 @@ def _memoryd_commit(kind, title, content, tags, source_ref):
     return None, f"status={resp.get('status')} reason={str(resp.get('reason'))[:80]}"
 
 
+def _held_single_ref(ref):
+    """wq#4538: True when `ref` is a single wq#N whose claim RECEIPT (claimed_by,
+    written only by `wq claim`, survives close — kernel.py ticket_claimant) names
+    this agent: the one source_ref shape memoryd's I-7 can verify, so it must be
+    left alone. Lists/ranges return False (the gate can never verify them). On an
+    unreadable queue.db a single wq#N returns True — never rewrite a possibly
+    legitimate fworker/session ref; the worst case is today's reject→spool."""
+    m = re.fullmatch(r'wq#(\d+)', ref)
+    if not m:
+        return False
+    agent = minerva_audit.agent_id()
+    try:
+        q = sqlite3.connect('file:%s?mode=ro' % QUEUE_DB, uri=True, timeout=3.0)
+        try:
+            row = q.execute('SELECT claimed_by FROM tasks WHERE id=?',
+                            (int(m.group(1)),)).fetchone()
+        finally:
+            q.close()
+    except Exception:
+        return True
+    return bool(row) and bool(agent) and row[0] == agent
+
+
 def commit(summary, changed=None, worked=None, failed=None, why='',
            kind='session', tags=None, session_ref='', stated_by_frank=False, embed=True):
     def _b(label, items):
@@ -247,6 +273,16 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
         _b('What failed', failed) + '\n' +
         f'## Why / lessons\n{why or "(none)"}\n'
     )
+    # wq#4538: an orch cites the tickets it shepherded, but provenance I-7 can
+    # verify is its own session ticket. Keep the shepherded refs in content/tags
+    # (searchable), commit under the claim actually held. No held anchor → today's
+    # behavior unchanged (reject → local fallback → spool).
+    anchor = os.environ.get('WQ_SESSION_TICKET', '')
+    ref = (session_ref or '').strip()
+    if anchor and ref and ref != anchor and not _held_single_ref(ref):
+        content += '\n## Tickets\n%s\n' % ref
+        tags = list(tags or []) + ['tickets:' + ref]
+        session_ref = anchor
     # wq#1634 §4.5: memoryd first (it audits and governs), direct write second.
     # Today the fallback is the primary path for CLI sessions; it must not be the
     # unaudited one.

@@ -1,0 +1,29 @@
+--- claude_context.sh
++++ claude_context.sh
+@@ -27,6 +27,26 @@
+         echo "Then re-run:     bash $0 --core"
+         exit 1
+     fi
++    # wq#4538 S2: one real claim per orchestrator session, so every episode commit
++    # carries provenance I-7 can verify. The receipt (claimed_by) survives close,
++    # so even post-session spool replays land (wq#3352). Reuse before add: a
++    # re-booted session re-claims/reuses its own open ticket instead of leaking one.
++    QUEUE_DB=${WQ_QUEUE_DB:-/home/lumen/agents/work-queue/queue.db}
++    session_tid=$(sqlite3 "file:$QUEUE_DB?mode=ro" \
++        "SELECT id FROM tasks WHERE lane='session' AND claimed_by='$session_id' \
++         AND status='claimed' ORDER BY id DESC LIMIT 1" 2>/dev/null)
++    if [ -z "$session_tid" ]; then
++        /home/lumen/bin/wq add --lane session \
++            --title "session: $session_id $(date -u +%F)" \
++            --detail "synthetic session ticket (wq#4538 S2): claim anchor for episode commits" \
++            --no-probe "session anchor; closes at handoff with the session summary"
++        session_tid=$(sqlite3 "file:$QUEUE_DB?mode=ro" \
++            "SELECT id FROM tasks WHERE lane='session' AND title LIKE 'session: $session_id%' \
++             ORDER BY id DESC LIMIT 1")
++        /home/lumen/bin/wq claim --id "$session_tid" --lane session
++    fi
++    export WQ_SESSION_TICKET="wq#$session_tid"
++    echo "===== SESSION TICKET: wq#$session_tid (episode commits: source_ref=wq#$session_tid) ====="
+     /home/lumen/bin/handoff verify 2>/dev/null; echo
+     # wq#1630: re-render the generated region at the top of HANDOFF.md (in-flight claims, last
+     # landed PRs, detector stamps) so it is seconds old here, not up to 30 min — same pattern as
