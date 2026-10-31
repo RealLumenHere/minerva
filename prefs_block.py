@@ -25,13 +25,20 @@ the drift-only ticketing path -- two different triggers, one render function.
 """
 import argparse
 import difflib
+import os
 import re
 import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
 
-sys.path.insert(0, '/home/lumen/minerva')
+# lumen_state lives beside this file -- in the deployed /home/lumen/minerva and
+# in any checkout of it. wq#4802: this used to insert the live path literally,
+# which put /home/lumen/minerva at sys.path[0] for everything imported after
+# it, so a test run out of a worktree silently imported the LIVE siblings
+# (lumen_state imports this module before fleet_memory_writer, so a worktree's
+# fleet_memory_writer fix was invisible to its own tests).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import lumen_state as ls  # noqa: E402
 
 WQ_BIN = '/home/lumen/bin/wq'

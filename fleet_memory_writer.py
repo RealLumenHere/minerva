@@ -70,6 +70,14 @@ def _table_cfg(table):
         raise ValueError(f"unknown table {table!r}; expected one of {list(TABLES)}")
 
 
+def _table_exists(conn, table):
+    """True if `table` exists in this DB -- the same sqlite_master check
+    minerva_audit.ensure_table() makes before it writes memory_audit."""
+    return conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (table,)).fetchone() is not None
+
+
 def _fetch_active(conn, table, row_id):
     cfg = _table_cfg(table)
     row = conn.execute(
@@ -129,9 +137,21 @@ def expire_facts_naming_subject(conn, subject, source_ref, invariant=None):
     word-continuation characters, or the exact wq#4789 subject would never
     match.
 
+    No-ops (returns []) on a DB that has no fleet_facts table: that table is
+    not in lumen_state.init_schema() -- it was populated once by the wq#4554
+    Postgres copy -- so every throwaway test fixture, and any minerva.db
+    rebuilt before that copy runs, has none. This is the opportunistic half of
+    a lifecycle closure and runs inside the CALLER's transaction
+    (lumen_state.py:826-833), so raising here rolled back the whole
+    state_facts closure the caller had already written, losing far more than
+    the cascade (wq#4802; wq#4799 found it, 12 lumen_state tests). Same
+    non-fatal stance as a missing context_builder regen below.
+
     Returns the list of fleet_facts ids expired."""
     needle = (subject or '').strip()
     if not needle:
+        return []
+    if not _table_exists(conn, 'fleet_facts'):
         return []
     pattern = re.compile(r'(?<!\w)' + re.escape(needle) + r'(?!\w)', re.IGNORECASE)
     rows = conn.execute(

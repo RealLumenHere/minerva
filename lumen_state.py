@@ -827,7 +827,9 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
         # reg['closing']`) doesn't just close state_facts rows above -- it
         # also leaves prose copies of the retired subject sitting in
         # fleet_facts (claude_memory.md FLEET FACTS), which nothing else
-        # expires. Same transaction, same commit below.
+        # expires. Same transaction, same commit below -- so it no-ops on a DB
+        # with no fleet_facts table rather than taking this closure down with
+        # it (wq#4802).
         fleet_memory_writer.expire_facts_naming_subject(
             conn, subject, source_ref or f'lumen_state:{subject}.lifecycle={value}',
             invariant=f'lifecycle-retire-{subject}')
