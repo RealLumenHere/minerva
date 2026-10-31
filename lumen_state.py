@@ -52,6 +52,7 @@ import minerva_audit
 import projection_state
 import state_value_split
 import prefs_block
+import fleet_memory_writer
 
 DB = '/home/lumen/minerva/minerva.db'
 REGISTRY_PATH = os.environ.get(
@@ -822,6 +823,14 @@ def _ingest(conn, subject, predicate, value, valid_from, source_ref,
         for cid, cpred in closed_ids(conn, fid):
             _audit(minerva_audit.SUPERSEDE, cid,
                    f'{subject}.{cpred} closed by lifecycle {value} ({fid})')
+        # wq#4795: a lifecycle closure (we're already inside `value in
+        # reg['closing']`) doesn't just close state_facts rows above -- it
+        # also leaves prose copies of the retired subject sitting in
+        # fleet_facts (claude_memory.md FLEET FACTS), which nothing else
+        # expires. Same transaction, same commit below.
+        fleet_memory_writer.expire_facts_naming_subject(
+            conn, subject, source_ref or f'lumen_state:{subject}.lifecycle={value}',
+            invariant=f'lifecycle-retire-{subject}')
     conn.commit()
     res = {'action': action, 'subject': subject, 'predicate': predicate, 'value': value,
            'note': note, 'prior': (open_row['value'] if open_row else None),

@@ -1,1 +1,8 @@
-{"criteria": [{"id": "AC1", "citation": "minerva_defer_review.py:206-208"}]}
+{
+  "criteria": [
+    {
+      "id": "AC1",
+      "citation": "lumen_state.py:826-833"
+    }
+  ]
+}
