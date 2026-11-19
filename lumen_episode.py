@@ -41,7 +41,7 @@ Now: exit 4, reason first line on stderr, payload spooled to EPISODE_SPOOL_DIR f
 lumen_episode_spool_replay.py (lumen-episode-spool-replay.timer) to retry once the
 same agent id can pass the gate.
 """
-import os, json, re, sqlite3, sys, argparse, tempfile, uuid
+import os, json, re, sqlite3, sys, argparse, tempfile, time, uuid
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -262,8 +262,143 @@ def _held_single_ref(ref):
     return bool(row) and bool(agent) and row[0] == agent
 
 
+FWORKER_RE = re.compile(r'^fworker-wq(\d+)$')
+_REF_TICKET_RE = re.compile(r'wq#?(\d+)')
+
+
+def _claimant(tid):
+    """claimed_by for wq#tid from queue.db (read-only), or None."""
+    try:
+        q = sqlite3.connect('file:%s?mode=ro' % QUEUE_DB, uri=True, timeout=3.0)
+        try:
+            row = q.execute('SELECT claimed_by FROM tasks WHERE id=?', (int(tid),)).fetchone()
+        finally:
+            q.close()
+    except Exception:
+        return None
+    return row[0] if row else None
+
+
+def normalize_ref(ref, agent):
+    """wq#5013: the two commonest memoryd I-7 rejects, fixed at the source.
+
+    (a) a fleet worker `fworker-wq<N>` that passed no --ref: its identity already
+        names its ticket, and memoryd demands exactly source_ref=wq#<N> from it.
+    (b) a session citing several tickets (`wq#5104,wq#5105`): memoryd can only verify
+        a single wq#N, so anchor on the first cited ticket whose claim receipt names
+        this agent and keep the full list in content/tags (same shape as the
+        WQ_SESSION_TICKET anchor of wq#4538, without needing that env var).
+    Returns (ref, extra_ref_list_or_None). Never raises; unknown shapes pass through."""
+    ref = (ref or '').strip()
+    fw = FWORKER_RE.match(agent or '')
+    if not ref and fw:
+        return 'wq#' + fw.group(1), None
+    tids = _REF_TICKET_RE.findall(ref)
+    if len(tids) > 1 or (tids and not re.fullmatch(r'wq#\d+', ref)):
+        for tid in tids:
+            if agent and _claimant(tid) == agent:
+                return 'wq#' + tid, ref
+    return ref, None
+
+
+MEMO_VERDICTS = ('violated', 'shaped', 'not-applicable', 'no-visible-effect')
+MEMO_RE = re.compile(r'^M-([0-9a-f]{6,40})\s*=\s*([a-z-]+)\s*(?::\s*(.*))?$', re.S)
+PRECHECK_CACHE_DIR = os.environ.get('EPISODE_PRECHECK_CACHE',
+                                    os.path.expanduser('~/.cache/lumen_episode'))
+
+
+class MemoError(ValueError):
+    pass
+
+
+def parse_memo(spec):
+    """wq#5013 MemoSync post-turn audit. `spec` is `M-<id>=<verdict>[: reason]` items
+    separated by `;`. Returns [(id, verdict, reason)]; raises MemoError on bad input."""
+    out = []
+    for raw in [x.strip() for x in (spec or '').split(';') if x.strip()]:
+        m = MEMO_RE.match(raw)
+        if not m:
+            raise MemoError('memo item %r is not M-<id>=<verdict>[: reason]' % raw[:60])
+        mid, verdict, reason = m.group(1), m.group(2), (m.group(3) or '').strip()
+        if verdict not in MEMO_VERDICTS:
+            raise MemoError('memo verdict %r for M-%s not in %s' % (verdict, mid, '/'.join(MEMO_VERDICTS)))
+        out.append((mid, verdict, reason))
+    return out
+
+
+def _precheck_cache_path(agent):
+    safe = re.sub(r'[^A-Za-z0-9_.-]', '_', agent or 'anon')[:80]
+    return os.path.join(PRECHECK_CACHE_DIR, 'surfaced-%s.json' % safe)
+
+
+def remember_surfaced(hits, agent):
+    """Record which memories precheck surfaced to this agent, so commit can ask
+    whether each one shaped the work. Fail-open: a cache problem never blocks."""
+    try:
+        os.makedirs(PRECHECK_CACHE_DIR, exist_ok=True)
+        path = _precheck_cache_path(agent)
+        try:
+            cur = json.load(open(path))
+        except Exception:
+            cur = {}
+        now = time.time()
+        cur = {k: v for k, v in cur.items() if now - v.get('ts', 0) < 12 * 3600}
+        for h in hits:
+            if h.get('id'):
+                cur[str(h['id'])] = {'ts': now, 'kind': (h.get('kind') or '').lower(),
+                                     'title': (h.get('title') or '')[:80]}
+        with open(path + '.tmp', 'w') as fh:
+            json.dump(cur, fh)
+        os.replace(path + '.tmp', path)
+    except Exception:
+        pass
+
+
+def surfaced(agent):
+    try:
+        cur = json.load(open(_precheck_cache_path(agent)))
+    except Exception:
+        return {}
+    now = time.time()
+    return {k: v for k, v in cur.items() if now - v.get('ts', 0) < 12 * 3600}
+
+
+def forget_surfaced(agent):
+    try:
+        os.remove(_precheck_cache_path(agent))
+    except OSError:
+        pass
+
+
+def memo_audit(items, surfaced_items):
+    """Return (block_text, tags, refusals, warnings) for the post-turn audit.
+    Refuse: a `violated` memory with no reason (say what happened and why).
+    Warn: a `violated` with a reason; a failure/lesson-class memory marked
+    `no-visible-effect` with no reason; surfaced memories that got no verdict."""
+    refusals, warnings, lines, tags = [], [], [], []
+    given = {mid for mid, _, _ in items}
+    for mid, verdict, reason in items:
+        lines.append('- M-%s: %s%s' % (mid, verdict, (' -- ' + reason) if reason else ''))
+        tags.append('memo:' + verdict)
+        kind = (surfaced_items.get(mid) or {}).get('kind', '')
+        if verdict == 'violated' and not reason:
+            refusals.append('M-%s marked violated with no reason: say what was done against it and why' % mid)
+        elif verdict == 'violated':
+            warnings.append('M-%s VIOLATED: %s' % (mid, reason))
+        if verdict == 'no-visible-effect' and kind in FAILURE_KINDS and not reason:
+            warnings.append('M-%s is a %s memory and had no visible effect, with no explanation' % (mid, kind))
+    missing = [m for m in surfaced_items if m not in given]
+    if missing:
+        warnings.append('post-turn audit: %d surfaced memor%s got no verdict: %s' % (
+            len(missing), 'y' if len(missing) == 1 else 'ies',
+            ', '.join('M-' + m for m in missing[:8])))
+    block = ('\n## Memory audit (MemoSync, wq#5013)\n' + '\n'.join(lines) + '\n') if lines else ''
+    return block, sorted(set(tags)), refusals, warnings
+
+
 def commit(summary, changed=None, worked=None, failed=None, why='',
-           kind='session', tags=None, session_ref='', stated_by_frank=False, embed=True):
+           kind='session', tags=None, session_ref='', stated_by_frank=False, embed=True,
+           memo_block='', memo_tags=None):
     def _b(label, items):
         items = [i for i in (items or []) if i]
         return f'## {label}\n' + ('\n'.join(f'- {i}' for i in items) if items else '- (none)') + '\n'
@@ -272,7 +407,9 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
         _b('What worked', worked) + '\n' +
         _b('What failed', failed) + '\n' +
         f'## Why / lessons\n{why or "(none)"}\n'
-    )
+    ) + (memo_block or '')
+    if memo_tags:
+        tags = list(tags or []) + list(memo_tags)
     # wq#4538: an orch cites the tickets it shepherded, but provenance I-7 can
     # verify is its own session ticket. Keep the shepherded refs in content/tags
     # (searchable), commit under the claim actually held. No held anchor → today's
@@ -283,6 +420,14 @@ def commit(summary, changed=None, worked=None, failed=None, why='',
         content += '\n## Tickets\n%s\n' % ref
         tags = list(tags or []) + ['tickets:' + ref]
         session_ref = anchor
+    else:
+        # wq#5013: no anchor (or nothing to re-anchor): fix the fworker no-ref and
+        # multi-ticket shapes memoryd I-7 can never accept.
+        fixed, extra = normalize_ref(session_ref, minerva_audit.agent_id())
+        if extra:
+            content += '\n## Tickets\n%s\n' % extra
+            tags = list(tags or []) + ['tickets:' + extra]
+        session_ref = fixed
     # wq#1634 §4.5: memoryd first (it audits and governs), direct write second.
     # Today the fallback is the primary path for CLI sessions; it must not be the
     # unaudited one.
@@ -462,7 +607,8 @@ def _fmt(h):
     mark = '\u26a0\ufe0f ' if k in FAILURE_KINDS else '  '
     ext = '[ext] ' if (h.get('trust') == 'external'
                        or str(h.get('ref') or '').startswith('messenger:')) else ''  # P5 quarantine marker
-    return f'{mark}[{h["tier"]}/{h.get("kind","")}] {h.get("score",0):.2f}  {ext}{h.get("title","")[:80]}'
+    mid = f'M-{h["id"]} ' if h.get('id') else ''  # wq#5013 citation id
+    return f'{mark}[{h["tier"]}/{h.get("kind","")}] {h.get("score",0):.2f}  {mid}{ext}{h.get("title","")[:80]}'
 
 def _main():
     ap = argparse.ArgumentParser()
@@ -475,6 +621,10 @@ def _main():
     pc.add_argument('--worked', default=''); pc.add_argument('--failed', default='')
     pc.add_argument('--why', default=''); pc.add_argument('--kind', default='session')
     pc.add_argument('--tags', default=''); pc.add_argument('--ref', default='')
+    pc.add_argument('--memo', default='',
+                    help='wq#5013 MemoSync post-turn audit: "M-<id>=<verdict>[: reason]; ..." '
+                         'verdict in violated|shaped|not-applicable|no-visible-effect, one per memory '
+                         'that precheck surfaced')
     pc.add_argument('--stated-by-frank', action='store_true',
                     help='wq#1634: Frank asserted this himself -> source_kind=frank_stated')
     a = ap.parse_args()
@@ -487,6 +637,10 @@ def _main():
         v, hits = precheck(' '.join(a.plan)); print(v)
         for h in hits:
             print(_fmt(h))
+        # wq#5013: remember what was surfaced so `commit --memo` can be audited against it
+        remember_surfaced(hits, minerva_audit.agent_id())
+        if hits:
+            print('cite in commit: --memo "M-<id>=shaped|not-applicable|no-visible-effect|violated[: why]"')
     elif a.cmd == 'commit':
         sp = lambda s: [x.strip() for x in s.replace(';', ',').split(',') if x.strip()]
         # wq#2901 I-4: refuse a kind memoryd would 422 on, here, where the caller
@@ -499,12 +653,27 @@ def _main():
         # wq#2772: FAIL LOUD. Exit 3 + stderr when the row or its FTS event is not
         # in minerva.db; the "committed" line is printed only after read-back, and
         # BEFORE the embed, so a caller timeout during embed still saw the truth.
+        # wq#5013 MemoSync post-turn audit: before anything is written.
+        _agent = minerva_audit.agent_id()
+        try:
+            memo_items = parse_memo(a.memo)
+        except MemoError as e:
+            print(f'lumen_episode: {e}', file=sys.stderr, flush=True)
+            sys.exit(2)
+        memo_block, memo_tags, memo_refuse, memo_warn = memo_audit(memo_items, surfaced(_agent))
+        if memo_refuse:
+            for r in memo_refuse:
+                print(f'lumen_episode: MEMO REFUSE {r}', file=sys.stderr, flush=True)
+            sys.exit(5)
+        for w in memo_warn:
+            print(f'lumen_episode: MEMO WARN {w}', file=sys.stderr, flush=True)
         try:
             nid, reject_reason = commit(
                 a.summary, changed=sp(a.changed), worked=sp(a.worked),
                 failed=sp(a.failed), why=a.why, kind=kind,
                 tags=sp(a.tags), session_ref=a.ref,
-                stated_by_frank=a.stated_by_frank, embed=False)
+                stated_by_frank=a.stated_by_frank, embed=False,
+                memo_block=memo_block, memo_tags=memo_tags)
         except mm.NotPersisted as e:
             print(f'EPISODE NOT PERSISTED: {e}', file=sys.stderr, flush=True)
             sys.exit(3)
@@ -518,7 +687,9 @@ def _main():
             print(f'committed episode {nid} to the LOCAL store only '
                   f'(db-verified) -- spooled to {EPISODE_SPOOL_DIR} for replay', flush=True)
             mm.embed_note(nid)
+            forget_surfaced(_agent)
             sys.exit(4)
+        forget_surfaced(_agent)
         print(f'committed episode {nid} (db-verified: archival_notes + recall_fts)', flush=True)
         mm.embed_note(nid)
 
