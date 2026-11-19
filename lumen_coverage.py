@@ -133,6 +133,41 @@ def fact_line(counts):
             ' · unverifiable {unverifiable} · contradicted {contradicted}').format(**counts)
 
 
+# ── wq#5028: wq#5008 taxonomy counts for the handoff verify line ─────────────
+TAXONOMY_DB = os.environ.get('LUMEN_TAXONOMY_DB', '/home/lumen/foreman/fact_taxonomy.db')
+
+
+def taxonomy_line(db=None, now=None):
+    """'taxonomy: verified W world / F formal · blocked B · unverifiable U · deny D (scan Nh old)'
+    from the newest foreman ledger run, or None when there is no ledger/run. Read-only.
+    A scan older than 2 days says STALE so a dead timer is visible on the boot line."""
+    import sqlite3
+    path = db or TAXONOMY_DB
+    if os.environ.get('LUMEN_NO_TAXONOMY') or not os.path.exists(path):
+        return None
+    try:
+        c = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+        try:
+            row = c.execute('SELECT ts, summary FROM taxonomy_runs ORDER BY id DESC LIMIT 1').fetchone()
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    try:
+        s = json.loads(row[1])
+    except (TypeError, ValueError):
+        return None
+    st, sc, adm = s.get('status', {}), s.get('verified_scope', {}), s.get('admission', {})
+    t_now = (now or _now()).timestamp()
+    age_h = max(0.0, (t_now - float(row[0] or 0)) / 3600.0)
+    age = f'{age_h:.0f}h old' if age_h < 48 else f'{age_h / 24:.0f}d old, STALE'
+    return (f"taxonomy: verified {sc.get('world', 0)} world / {sc.get('formal', 0)} formal"
+            f" · blocked {st.get('BLOCKED', 0)} · unverifiable {st.get('UNVERIFIABLE', 0)}"
+            f" · deny {adm.get('DENY', 0)} (scan {age})")
+
+
 # ── week-over-week regression ────────────────────────────────────────────────
 
 def init_schema(conn):
@@ -214,7 +249,9 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.cmd == 'line':
-        print(fact_line(fact_coverage()))
+        line = fact_line(fact_coverage())
+        tax = taxonomy_line()
+        print(line + (f' | {tax}' if tax else ''))
         return 0
     if args.cmd == 'facts':
         counts = fact_coverage()

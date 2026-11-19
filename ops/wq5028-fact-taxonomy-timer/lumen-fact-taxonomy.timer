@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily fact taxonomy scan (wq#5028), 12:40 UTC = before the 13:00 UTC brief
+
+[Timer]
+OnCalendar=*-*-* 12:40:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

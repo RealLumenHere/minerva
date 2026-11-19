@@ -45,7 +45,7 @@ reconfirm, agent_id=$WQ_AGENT, lane read from the ticket in source_ref) INSIDE t
 same transaction as the fact, and stamps `source_kind` on the fact itself. "Who
 wrote this fact and from which ticket" is now a SELECT, not an archaeology project.
 """
-import sqlite3, sys, uuid, argparse, os, json, fnmatch, difflib
+import sqlite3, sys, uuid, argparse, os, json, fnmatch, difflib, hashlib, re
 from datetime import datetime, timezone
 
 import minerva_audit
@@ -928,6 +928,73 @@ def check(conn=None):
     if own: conn.close()
     return {'ok': not out, 'violations': out}
 
+# ── wq#5028: wq#5008 fact taxonomy overlay (display only) ──────────────────
+# The foreman ledger (harness/fact_taxonomy.py scan --write) classifies every open fact
+# VERIFIED(world|formal) / BLOCKED / UNVERIFIABLE x ADMIT / DENY. `current` used to print
+# one '[UNVERIFIABLE — no probe]' for both "no probe exists" and "a probe exists but keeps
+# answering unknown", which hid 200 failing probes (wq#5026). This overlay is READ-ONLY:
+# it never writes the store, and a formal-scope verdict never touches last_confirmed_at
+# (QWED #320: a formal proof is not world evidence). A ledger row applies only while its
+# value_sha256 still matches the open fact's value, so a stale scan never mislabels.
+TAXONOMY_DB = os.environ.get('LUMEN_TAXONOMY_DB', '/home/lumen/foreman/fact_taxonomy.db')
+_BLOCKED_RE = re.compile(r"probe:\s*probe\s+(\S+)\s+last returned\s+'?([\w-]+)'?\s+at\s+(\d{4}-\d{2}-\d{2})")
+
+def load_taxonomy(db=None):
+    """{(subject, predicate): ledger row dict} or {} when the ledger is absent/unreadable
+    or LUMEN_NO_TAXONOMY is set. Never raises."""
+    if os.environ.get('LUMEN_NO_TAXONOMY'):
+        return {}
+    path = db or TAXONOMY_DB
+    if not os.path.exists(path):
+        return {}
+    try:
+        c = sqlite3.connect(f'file:{path}?mode=ro', uri=True, timeout=5)
+        c.row_factory = sqlite3.Row
+        try:
+            return {(r['subject'], r['predicate']): dict(r) for r in c.execute(
+                'SELECT subject, predicate, value_sha256, status, scope, admission, '
+                'issues, blocked_by, checked_at FROM fact_taxonomy')}
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return {}
+
+def _short_blocked(blocked_by):
+    m = _BLOCKED_RE.search(blocked_by or '')
+    if m:
+        return f'probe {m.group(1)}: {m.group(2)} since {m.group(3)}'
+    return (blocked_by or 'no answer')[:60]
+
+def taxonomy_label(t, base):
+    """Evidence label with the taxonomy folded in. `base` is the wq#1612 ordinal label."""
+    status, scope = t.get('status'), t.get('scope')
+    lab = base
+    if status == 'BLOCKED':
+        why = _short_blocked(t.get('blocked_by'))
+        lab = f'[BLOCKED — {why}]' if base.startswith('[UNVERIFIABLE') else f'{base} [BLOCKED — {why}]'
+    elif status == 'VERIFIED' and scope == 'formal' and base.startswith('[UNVERIFIABLE'):
+        lab = '[UNVERIFIABLE — no world probe · formal ✓]'
+    if t.get('admission') == 'DENY':
+        try:
+            issues = ','.join(json.loads(t.get('issues') or '[]')) or 'issue'
+        except (ValueError, TypeError):
+            issues = str(t.get('issues') or 'issue')
+        lab += f' [DENY: {issues}]'
+    return lab
+
+def overlay_taxonomy(rows, ledger=None):
+    """Attach `taxonomy` and fold it into `evidence` for each current() row, in place."""
+    ledger = load_taxonomy() if ledger is None else ledger
+    if not ledger:
+        return rows
+    for r in rows:
+        t = ledger.get((r['subject'], r['predicate']))
+        if not t or t.get('value_sha256') != hashlib.sha256((r.get('value') or '').encode('utf-8')).hexdigest():
+            continue
+        r['taxonomy'] = {k: t.get(k) for k in ('status', 'scope', 'admission')}
+        r['evidence'] = taxonomy_label(t, r.get('evidence') or '')
+    return rows
+
 def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
             now=None, conn=None):
     """Open facts (valid_to IS NULL). Each row dict also carries `confidence`
@@ -964,7 +1031,7 @@ def current(subject=None, predicate=None, limit=None, min_confidence=0.0,
             continue
         rows.append(annotate(d, now=now))
     if own: conn.close()
-    return rows
+    return overlay_taxonomy(rows)
 
 def as_of(when, subject=None, predicate=None, conn=None):
     """World-truth point-in-time: facts whose valid window contains `when`."""

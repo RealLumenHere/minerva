@@ -1,0 +1,11 @@
+[Unit]
+Description=wq#5008/wq#5028 fact taxonomy scan: classify open lumen_state facts into the foreman ledger (read-only on minerva.db)
+Documentation=file:///home/lumen/foreman/design/WQ5008_FACT_TAXONOMY.md
+
+[Service]
+Type=oneshot
+# The qwed-engines venv carries z3/sqlglot/sympy; system python would mark those routes BLOCKED.
+ExecStart=/home/lumen/.local/share/qwed-engines/venv/bin/python /home/lumen/foreman/harness/fact_taxonomy.py scan --write
+ExecStartPost=-/home/lumen/bin/lumen-cron-stamp %n
+Nice=10
+TimeoutStartSec=900
