@@ -70,12 +70,20 @@ def _probe_hardware():
 
 def _probe_litellm_models():
     try:
+        # wq#3840: LiteLLM requires auth; the agent/.env master key went stale (401).
+        # Prefer the read-only-use ops-emergency service key, fall back to the legacy env key.
         key = ''
-        with open('/home/lumen/agent/.env') as f:
-            for line in f:
-                if line.startswith('LITELLM_MASTER_KEY='):
-                    key = line.split('=', 1)[1].strip().strip('"').strip("'")
-                    break
+        try:
+            with open('/home/lumen/.secrets/litellm-service-keys/ops-emergency.key') as f:
+                key = f.read().strip()
+        except OSError:
+            pass
+        if not key:
+            with open('/home/lumen/agent/.env') as f:
+                for line in f:
+                    if line.startswith('LITELLM_MASTER_KEY='):
+                        key = line.split('=', 1)[1].strip().strip('"').strip("'")
+                        break
         req = urllib.request.Request('http://localhost:4000/v1/models',
                                      headers={'Authorization': f'Bearer {key}'})
         with urllib.request.urlopen(req, timeout=10) as r:

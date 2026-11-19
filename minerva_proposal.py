@@ -107,9 +107,8 @@ Pipelines (all systemd services on Lumen):
 - minerva-classifier (every 4h): two-axis LLM scoring -> classified_intel.
 - minerva-proposal (every 4h): THIS module. minerva-eval (every 4h): 7 safety checks -> deploy_ready or blocked.
 - minerva-brief (daily 13:00 UTC): morning brief appended to claude_memory.md.
-- lumen-scout + lumen-signal-engine (daily 06:00 UTC): GitHub trending + Reddit/HN signals -> VIP prompts.
+- lumen-scout (daily 06:00 UTC): GitHub trending -> VIP prompts.
 - lumen-fleet-cerebras/sambanova/mistral/openrouter: research workers consuming /home/lumen/scratch/research_prompts/, writing research notes (NOT blog posts) to /home/lumen/scratch/research/.
-- lumen-prompt-engine + lumen-persona-engine: keep the prompt queue full from rotating topic banks.
 - lumen-research-index: embeds the research corpus into pgvector (research_docs) via local Ollama nomic-embed-text.
 - lumen-pause (13:00 UTC) / lumen-resume (16:00 UTC): daily quiet window for fleet writers.
 

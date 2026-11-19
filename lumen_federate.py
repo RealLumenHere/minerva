@@ -574,8 +574,13 @@ def index(full=False, ctx_mode='header', limit=None, verbose=True):
                  r['source_mtime'], r['id'], now, now))
             if budget is not None:
                 budget -= 1
+            # wq#3144: commit after EVERY insert, never verbose-gated. The INSERT above
+            # opens an implicit write txn; without this the next mm.embed() (slow, CPU
+            # nomic) ran with that txn open and starved every other minerva.db writer
+            # ('database is locked' >4 min at load 12, 2026-09-28). Regression test:
+            # tests/test_federate_index_txn.py.
+            conn.commit()
             if verbose and (stats['new'] + stats['changed']) % 50 == 0:
-                conn.commit()
                 print(f'  .. {stats["new"] + stats["changed"]} embedded '
                       f'({time.time() - t0:.0f}s)')
         # stale chunk rows: a shorter section must not leave orphans behind
