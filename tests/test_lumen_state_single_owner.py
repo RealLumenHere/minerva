@@ -222,13 +222,14 @@ def test_check_detects_every_class(db):
 
 
 def test_cli_refusal_exits_2_and_check_exits_1(db, tmp_path):
-    env = dict(os.environ)
+    env = dict(os.environ, STATE_ADMISSION_LOG=str(tmp_path / 'admission.jsonl'))
     script = os.path.join(HERE, 'lumen_state.py')
     code = ("import sys,runpy; sys.argv=['lumen_state.py']+sys.argv[1:]; "
             f"import lumen_state as m; m.DB={ls.DB!r}; m._main()")
     run = lambda *a: subprocess.run([sys.executable, '-c', code, *a], cwd=HERE, env=env,
                                     capture_output=True, text=True)
-    r = run('ingest', 'thoth', 'totally_new_axis', 'v')
+    # --source so the wq#5006 admission gate (exit 3) passes and the wq#1700 gate is what refuses
+    r = run('ingest', 'thoth', 'totally_new_axis', 'v', '--source', 'wq#1700 test')
     assert r.returncode == 2 and 'REFUSED' in r.stderr
     raw_insert('g', 'gameboy', 'ts_ip', '100.1.1.1')
     r = run('check')

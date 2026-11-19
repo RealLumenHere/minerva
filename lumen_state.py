@@ -1010,6 +1010,12 @@ def _main():
                     help='wq#1629: the prose that goes with the value. Given, the '
                          'value is stored verbatim; omitted, a prose value is split '
                          'into token + note by rule')
+    pi.add_argument('--why', default=None,
+                    help='wq#5006: rationale. Required in spirit when the write reverses a current '
+                         'value (admission criterion 6); stored with the note')
+    pi.add_argument('--admit-override', default=None, metavar='REASON',
+                    help='wq#5006: write despite an admission REFUSE, on the record '
+                         '(logged to state_admission.ADMISSION_LOG)')
     sub.add_parser('check')
     pc = sub.add_parser('current'); pc.add_argument('subject', nargs='?'); pc.add_argument('predicate', nargs='?')
     pc.add_argument('--limit', type=int, default=None); pc.add_argument('--min-confidence', type=float, default=0.0)
@@ -1025,12 +1031,40 @@ def _main():
     if a.cmd == 'init':
         init_schema(); print('schema ready'); return
     if a.cmd == 'ingest':
+        # wq#5006: six-point admission gate, CLI path only (library/probe callers skip it).
+        import state_admission
+        prior = None
         try:
-            print(ingest(a.subject, a.predicate, a.value, valid_from=a.valid_from, source_ref=a.source,
+            canon = canonical_predicate(a.predicate.strip().lower(), registry())
+            for r in current(a.subject.strip().lower(), canon):
+                prior = r.get('value')
+                break
+        except Exception:
+            prior = None  # the gate must never be a new way for an ingest to die
+        findings = state_admission.check(
+            a.subject, a.predicate, a.value, source=a.source, note=a.note, why=a.why,
+            half_life=a.half_life, prior_value=prior, source_kind=a.source_kind)
+        refusals = [f for f in findings if f[0] == 'REFUSE']
+        for lvl, crit, msg in findings:
+            print(f'ADMISSION {lvl} [{crit}] {msg}', file=sys.stderr)
+        if refusals and not a.admit_override:
+            state_admission.log('refused', a.subject, a.predicate, findings)
+            print('REFUSED by admission gate (wq#5006): fix the above, or pass '
+                  '--admit-override "<reason>" to write it on the record', file=sys.stderr)
+            sys.exit(3)
+        if findings:
+            state_admission.log('overridden' if refusals else 'warned', a.subject, a.predicate,
+                                findings, override=a.admit_override)
+        # --why rides on source_ref, not note: setting note would switch off the
+        # wq#1629 token/note split for a prose value.
+        source_ref = f'{a.source} | why: {a.why}' if a.why else a.source
+        note = a.note
+        try:
+            print(ingest(a.subject, a.predicate, a.value, valid_from=a.valid_from, source_ref=source_ref,
                          confidence=a.confidence, half_life_days=a.half_life,
                          new_predicate=a.new_predicate,
                          stated_by_frank=a.stated_by_frank,
-                         source_kind=a.source_kind, note=a.note))
+                         source_kind=a.source_kind, note=note))
         except StateGateError as e:
             print(f'REFUSED ({type(e).__name__}): {e}', file=sys.stderr)
             sys.exit(2)
