@@ -244,10 +244,17 @@ class Kernel:
 
             csha = sha256(content)
 
-            # I-3 no destructive replace: exact live duplicate is a no-op
+            # I-3 no destructive replace: exact live duplicate is a no-op.
+            # wq#5152: "exact" = same content AND same title AND same source_ref. Content
+            # alone collapsed distinct episodes: lumen_episode bodies are often all-'(none)'
+            # sections, so fworker-wq4882/4921/4935 replays all came back as one id and two
+            # titles never reached the store. A spool replay of the SAME episode still
+            # matches all three and stays a no-op. created_at is not part of the key: it is
+            # server-stamped per attempt, so keying on it would make every replay a new row.
             dup = con.execute(
                 "SELECT id FROM archival_notes WHERE content_sha256=? AND revoked_at IS NULL "
-                "AND superseded_by IS NULL LIMIT 1", (csha,)).fetchone()
+                "AND superseded_by IS NULL AND title=? AND source_ref=? LIMIT 1",
+                (csha, title, source_ref)).fetchone()
             if dup:
                 return Decision("accept", "exact duplicate of live row; no-op", "I-3",
                                 {"id": dup["id"], "noop": True})
