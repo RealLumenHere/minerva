@@ -348,6 +348,47 @@ class Kernel:
         except Exception:
             return None
 
+    def ticket_claimed_by_ever(self, tid, agent):
+        """wq#5166: provenance that survives wq clearing claimed_by. wq NULLs claimed_by on
+        block / frank_gated / release / awaiting_grant / reap, so ticket_claimant() alone
+        rejected every episode for a ticket its own worker had blocked (4993/4934/5041/5140
+        expired in the spool). wq now appends claim_receipts(ticket_id, agent, ...) in the
+        same txn as every claim write.
+
+        Rule (the explicit wq#2630 decision -- a receipt alone does NOT prove provenance):
+          claimed_by == agent                       -> True  (unchanged path)
+          claimed_by names SOMEONE ELSE             -> False (re-claimed: the can-fail probe
+                                                              holds even if `agent` has an
+                                                              older receipt)
+          claimed_by IS NULL and the LATEST receipt
+            for the ticket names agent              -> True
+          anything else                             -> False
+        So a receipt only speaks for a ticket nobody currently holds, and only for the last
+        agent that claimed it. A missing claim_receipts table (pre-migration queue, test
+        fixtures) degrades to the old claimed_by-only answer: fail closed, never open."""
+        agent = (agent or "").strip()
+        if not agent:
+            return False
+        try:
+            q = sqlite3.connect("file:%s?mode=ro" % self.queue_db, uri=True, timeout=3.0)
+            try:
+                r = q.execute("SELECT claimed_by FROM tasks WHERE id=?", (tid,)).fetchone()
+                if r is None:
+                    return False
+                holder = r[0]
+                if holder:
+                    return holder == agent
+                try:
+                    last = q.execute("SELECT agent FROM claim_receipts WHERE ticket_id=? "
+                                     "ORDER BY id DESC LIMIT 1", (tid,)).fetchone()
+                except sqlite3.OperationalError:
+                    return False  # no receipts table: claimed_by (NULL) is all we know
+                return bool(last) and last[0] == agent
+            finally:
+                q.close()
+        except Exception:
+            return False
+
     def lane_drift(self):
         """wq#2901: lanes `wq` dispatches that this contract has no row for. An
         unknown lane is a fail-closed reject (I-4), which is right -- but it was

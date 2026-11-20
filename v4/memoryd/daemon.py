@@ -123,7 +123,7 @@ class Handler(BaseHTTPRequestHandler):
         if fw:
             tid = fw.group(1)
             src = (body.get("source_ref") or "").strip()
-            if src == "wq#" + tid and K.ticket_claimant(tid) == agent:
+            if src == "wq#" + tid and K.ticket_claimed_by_ever(tid, agent):  # wq#5166
                 lane = K.ticket_lane(tid)
                 if not lane:
                     return None, "cannot resolve lane for wq#%s" % tid
@@ -153,7 +153,9 @@ class Handler(BaseHTTPRequestHandler):
                 # fworker branch above already trusts (kernel.py:327
                 # ticket_claimant, "any status") before refusing a write the session
                 # legitimately earned.
-                if K.ticket_claimant(tid) != agent:
+                # wq#5166: claimed_by OR the latest durable receipt (block/release clear
+                # claimed_by); a ticket re-claimed by someone else still refuses (wq#2630).
+                if not K.ticket_claimed_by_ever(tid, agent):
                     return None, "agent does not hold a live claim on %s" % src
             lane = K.ticket_lane(tid)
             if not lane:
